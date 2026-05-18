@@ -44,6 +44,8 @@ export function buildRoutes(producer: EventProducer) {
           environment: config.app.environment,
         });
 
+        log.info({ event }, "autoops.event.received");
+
         try {
           await producer.publishRaw(parsed.resourceId, body);
           await producer.publishNormalized(event);
