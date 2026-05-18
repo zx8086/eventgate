@@ -27,6 +27,17 @@ function stripPlaceholder(v: unknown): unknown {
   return v;
 }
 
+// AutoOps' "Validate" button posts the raw body template without substituting
+// placeholders. Detect that synthetic test so we can ack it with 202 instead of
+// failing schema validation; real malformed events still get rejected because
+// they will have at least one non-placeholder field.
+export function isSyntheticAutoOpsTest(raw: unknown): boolean {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length === 0) return false;
+  return entries.every(([, v]) => typeof v === "string" && v.startsWith("${") && v.endsWith("}"));
+}
+
 export function normalizeAutoOpsBody(raw: unknown): unknown {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const out: Record<string, unknown> = {};

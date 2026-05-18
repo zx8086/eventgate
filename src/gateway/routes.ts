@@ -2,7 +2,7 @@
 import { config } from "../config/index.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { normalizeElasticAutoOps } from "../normalize.ts";
-import { autoOpsWebhookSchema, normalizeAutoOpsBody } from "./schema.ts";
+import { autoOpsWebhookSchema, isSyntheticAutoOpsTest, normalizeAutoOpsBody } from "./schema.ts";
 import { getLogger } from "../logging/index.ts";
 
 const log = getLogger("gateway.routes");
@@ -23,6 +23,14 @@ export function buildRoutes(producer: EventProducer) {
           return Response.json(
             { accepted: false, error: "invalid JSON body" },
             { status: 400 },
+          );
+        }
+
+        if (isSyntheticAutoOpsTest(body)) {
+          log.info({ body }, "autoops synthetic validate received");
+          return Response.json(
+            { accepted: true, validation: "synthetic" },
+            { status: 202 },
           );
         }
 
