@@ -1,6 +1,7 @@
-import { Kafka, logLevel, type Producer } from "kafkajs";
+import { Kafka, type Producer } from "kafkajs";
 import { config } from "../config/index.ts";
 import type { NormalizedEvent } from "../types.ts";
+import { buildKafkaConfig } from "./clientConfig.ts";
 
 export type EventProducer = {
   publishRaw(resourceId: string, raw: unknown): Promise<void>;
@@ -11,11 +12,7 @@ export type EventProducer = {
 };
 
 export async function createProducer(clientId: string): Promise<EventProducer> {
-  const kafka = new Kafka({
-    clientId,
-    brokers: config.kafka.brokers,
-    logLevel: logLevel.INFO,
-  });
+  const kafka = new Kafka(buildKafkaConfig(clientId));
   const producer: Producer = kafka.producer({ allowAutoTopicCreation: true });
   await producer.connect();
   let connected = true;

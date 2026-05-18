@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@elastic/ecs-pino-format": "^1.5.0",
+    "aws-msk-iam-sasl-signer-js": "^1.0.3",
     "couchbase": "^4.4.0",
     "kafkajs": "^2.2.4",
     "pino": "^10.3.1",
