@@ -2,7 +2,7 @@
 import { config } from "../config/index.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { normalizeElasticAutoOps } from "../normalize.ts";
-import { autoOpsWebhookSchema } from "./schema.ts";
+import { autoOpsWebhookSchema, normalizeAutoOpsBody } from "./schema.ts";
 import { getLogger } from "../logging/index.ts";
 
 const log = getLogger("gateway.routes");
@@ -26,7 +26,8 @@ export function buildRoutes(producer: EventProducer) {
           );
         }
 
-        const result = autoOpsWebhookSchema.safeParse(body);
+        const normalized = normalizeAutoOpsBody(body);
+        const result = autoOpsWebhookSchema.safeParse(normalized);
         if (!result.success) {
           log.warn(
             { issues: result.error.issues, body },
