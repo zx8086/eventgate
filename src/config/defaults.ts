@@ -16,6 +16,8 @@ export const defaults = {
     clientIdGateway: "eventgate-gateway",
     clientIdWriter: "eventgate-writer",
     groupId: "autoops-couchbase-writer-v1",
+    auth: "none" as const,
+    region: undefined as string | undefined,
     topics: {
       raw: "ops.elastic.autoops.raw.v1",
       events: "ops.elastic.autoops.events.v1",
@@ -23,6 +25,7 @@ export const defaults = {
     },
   },
   couchbase: {
+    enabled: true,
     connStr: "couchbase://localhost",
     username: "Administrator",
     password: "password",
