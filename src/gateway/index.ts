@@ -11,7 +11,12 @@ const producer = await createProducer(config.kafka.clientIdGateway);
 const server = Bun.serve({
   port: config.server.port,
   routes: buildRoutes(producer),
-  fetch() {
+  fetch(req: Request) {
+    const url = new URL(req.url);
+    log.warn(
+      { method: req.method, path: url.pathname, ua: req.headers.get("user-agent") },
+      "unmatched request",
+    );
     return new Response("Not found", { status: 404 });
   },
   error(err) {
