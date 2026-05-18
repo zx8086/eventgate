@@ -15,7 +15,14 @@ import type { AutoOpsStateDoc, NormalizedEvent } from "../types.ts";
 
 const log = getLogger("writer");
 
-const cb = await connectCouchbase();
+const cb = config.couchbase.enabled ? await connectCouchbase() : null;
+if (!cb) {
+  log.warn(
+    { couchbaseEnabled: false },
+    "couchbase disabled; events will be logged but not persisted",
+  );
+}
+
 const dlqProducer = await createProducer(`${config.kafka.clientIdWriter}-dlq`);
 const consumer = await createConsumer(config.kafka.clientIdWriter, config.kafka.groupId);
 await consumer.subscribe({ topic: config.kafka.topics.events, fromBeginning: false });
@@ -43,6 +50,20 @@ await consumer.run({
       return;
     }
 
+    if (!cb) {
+      log.info(
+        {
+          resourceId: event.resource.id,
+          alertSignature: event.alert.alertSignature,
+          idempotencyKey: event.idempotencyKey,
+          status: event.alert.status,
+          severity: event.alert.severity,
+        },
+        "normalized event received (couchbase disabled)",
+      );
+      return;
+    }
+
     const historyKey = historyDocKey(event);
     await cb.history.upsert(historyKey, toHistoryDoc(event));
 
@@ -67,7 +88,7 @@ async function shutdown(signal: string) {
   try {
     await consumer.disconnect();
     await dlqProducer.disconnect();
-    await cb.close();
+    if (cb) await cb.close();
   } finally {
     process.exit(0);
   }
