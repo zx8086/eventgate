@@ -50,11 +50,7 @@ export function buildRoutes(producer: EventProducer) {
           await producer.publishRaw(parsed.resourceId, body);
           await producer.publishNormalized(event);
         } catch (err) {
-          log.error({ err, resourceId: parsed.resourceId }, "kafka publish failed");
-          return Response.json(
-            { accepted: false, error: "downstream publish failed" },
-            { status: 503 },
-          );
+          log.warn({ err, resourceId: parsed.resourceId }, "kafka publish failed; event logged only");
         }
 
         return Response.json(
