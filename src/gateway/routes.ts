@@ -28,6 +28,10 @@ export function buildRoutes(producer: EventProducer) {
 
         const result = autoOpsWebhookSchema.safeParse(body);
         if (!result.success) {
+          log.warn(
+            { issues: result.error.issues, body },
+            "schema validation failed",
+          );
           return Response.json(
             {
               accepted: false,
