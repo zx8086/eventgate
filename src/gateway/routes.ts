@@ -1,8 +1,11 @@
-import { z } from "zod";
-import { config } from "../config.ts";
+// src/gateway/routes.ts
+import { config } from "../config/index.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { normalizeElasticAutoOps } from "../normalize.ts";
 import { autoOpsWebhookSchema } from "./schema.ts";
+import { getLogger } from "../logging/index.ts";
+
+const log = getLogger("gateway.routes");
 
 export function buildRoutes(producer: EventProducer) {
   return {
@@ -23,38 +26,31 @@ export function buildRoutes(producer: EventProducer) {
           );
         }
 
-        let parsed;
-        try {
-          parsed = autoOpsWebhookSchema.parse(body);
-        } catch (error) {
-          if (error instanceof z.ZodError) {
-            return Response.json(
-              {
-                accepted: false,
-                error: "schema validation failed",
-                issues: error.issues,
-              },
-              { status: 400 },
-            );
-          }
-          throw error;
+        const result = autoOpsWebhookSchema.safeParse(body);
+        if (!result.success) {
+          return Response.json(
+            {
+              accepted: false,
+              error: "schema validation failed",
+              issues: result.error.issues,
+            },
+            { status: 400 },
+          );
         }
+        const parsed = result.data;
 
         const event = normalizeElasticAutoOps(parsed, {
-          tenant: config.tenant,
-          environment: config.environment,
+          tenant: config.app.tenant,
+          environment: config.app.environment,
         });
 
         try {
           await producer.publishRaw(parsed.resourceId, body);
           await producer.publishNormalized(event);
-        } catch (error) {
-          console.error("[gateway] kafka publish failed", error);
+        } catch (err) {
+          log.error({ err, resourceId: parsed.resourceId }, "kafka publish failed");
           return Response.json(
-            {
-              accepted: false,
-              error: "downstream publish failed",
-            },
+            { accepted: false, error: "downstream publish failed" },
             { status: 503 },
           );
         }

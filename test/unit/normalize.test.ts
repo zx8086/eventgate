@@ -7,8 +7,8 @@ import {
   normalizeSeverity,
   normalizeStatus,
   severityRank,
-} from "../normalize.ts";
-import type { ElasticAutoOpsWebhook } from "../types.ts";
+} from "../../src/normalize.ts";
+import type { ElasticAutoOpsWebhook } from "../../src/types.ts";
 
 const ctx = {
   tenant: "elastic-cloud",

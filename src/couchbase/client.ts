@@ -1,5 +1,5 @@
 import couchbase, { type Cluster, type Collection } from "couchbase";
-import { config } from "../config.ts";
+import { config } from "../config/index.ts";
 
 export type CouchbaseHandles = {
   cluster: Cluster;

@@ -4,9 +4,9 @@ import {
   historyDocKey,
   stateDocKey,
   toHistoryDoc,
-} from "../couchbase/projection.ts";
-import { normalizeElasticAutoOps } from "../normalize.ts";
-import type { ElasticAutoOpsWebhook } from "../types.ts";
+} from "../../src/couchbase/projection.ts";
+import { normalizeElasticAutoOps } from "../../src/normalize.ts";
+import type { ElasticAutoOpsWebhook } from "../../src/types.ts";
 
 const ctx = {
   tenant: "elastic-cloud",

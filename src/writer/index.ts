@@ -1,5 +1,7 @@
+// src/writer/index.ts
 import couchbase from "couchbase";
-import { config } from "../config.ts";
+import { config } from "../config/index.ts";
+import { getLogger } from "../logging/index.ts";
 import { connectCouchbase } from "../couchbase/client.ts";
 import {
   evolveState,
@@ -11,13 +13,16 @@ import { createConsumer } from "../kafka/consumer.ts";
 import { createProducer } from "../kafka/producer.ts";
 import type { AutoOpsStateDoc, NormalizedEvent } from "../types.ts";
 
+const log = getLogger("writer");
+
 const cb = await connectCouchbase();
 const dlqProducer = await createProducer(`${config.kafka.clientIdWriter}-dlq`);
 const consumer = await createConsumer(config.kafka.clientIdWriter, config.kafka.groupId);
 await consumer.subscribe({ topic: config.kafka.topics.events, fromBeginning: false });
 
-console.log(
-  `[writer] consuming ${config.kafka.topics.events} as group=${config.kafka.groupId}`,
+log.info(
+  { topic: config.kafka.topics.events, groupId: config.kafka.groupId },
+  "writer consuming",
 );
 
 await consumer.run({
@@ -31,14 +36,10 @@ await consumer.run({
       if (!event?.resource?.id || !event?.idempotencyKey) {
         throw new Error("missing required normalized fields");
       }
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "parse error";
-      console.error("[writer] invalid message, sending to DLQ:", reason);
-      await dlqProducer.publishDlq(
-        reason,
-        raw,
-        message.key?.toString() ?? undefined,
-      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "parse error";
+      log.warn({ err, reason }, "invalid message, sending to DLQ");
+      await dlqProducer.publishDlq(reason, raw, message.key?.toString() ?? undefined);
       return;
     }
 
@@ -50,11 +51,11 @@ await consumer.run({
     try {
       const existing = await cb.state.get(stateKey);
       previous = existing.content as AutoOpsStateDoc;
-    } catch (error) {
-      if (error instanceof couchbase.DocumentNotFoundError) {
+    } catch (err) {
+      if (err instanceof couchbase.DocumentNotFoundError) {
         previous = null;
       } else {
-        throw error;
+        throw err;
       }
     }
     await cb.state.upsert(stateKey, evolveState(previous, event));
@@ -62,7 +63,7 @@ await consumer.run({
 });
 
 async function shutdown(signal: string) {
-  console.log(`[writer] received ${signal}, shutting down`);
+  log.info({ signal }, "shutting down writer");
   try {
     await consumer.disconnect();
     await dlqProducer.disconnect();

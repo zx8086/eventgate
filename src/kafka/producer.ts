@@ -1,5 +1,5 @@
 import { Kafka, logLevel, type Producer } from "kafkajs";
-import { config } from "../config.ts";
+import { config } from "../config/index.ts";
 import type { NormalizedEvent } from "../types.ts";
 
 export type EventProducer = {
