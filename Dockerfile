@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # Bun executes .ts directly so there is no compile/bundle step.
 # -----------------------------------------------------------------------------
 FROM deps-base AS builder
-COPY package.json bun.lock* tsconfig.json bunfig.toml ./
+COPY package.json bun.lock* tsconfig.json ./
 COPY src ./src
 RUN rm -rf .git .github node_modules/.cache test/ tests/ \
            *.test.* *.spec.* *.md docs/ coverage/ .vscode .idea *.log
@@ -47,7 +47,6 @@ COPY --from=deps-prod --chown=65532:65532 /app/node_modules ./node_modules
 COPY --from=deps-prod --chown=65532:65532 /app/package.json ./package.json
 COPY --from=builder  --chown=65532:65532 /app/src           ./src
 COPY --from=builder  --chown=65532:65532 /app/tsconfig.json ./tsconfig.json
-COPY --from=builder  --chown=65532:65532 /app/bunfig.toml   ./bunfig.toml
 
 USER 65532:65532
 
