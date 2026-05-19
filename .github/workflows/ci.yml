@@ -1,0 +1,45 @@
+# Lint, type-check, test. Runs on every PR and push to default branch.
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Biome setup
+        if: hashFiles('biome.json', 'biome.jsonc') != ''
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Biome ci
+        if: hashFiles('biome.json', 'biome.jsonc') != ''
+        run: biome ci .
+
+      - run: bun run typecheck
+
+      - run: bun run test
+
+      - run: bun run build || true
