@@ -51,6 +51,12 @@ describe("normalizeStatus", () => {
     expect(normalizeStatus("Closed")).toBe("closed");
   });
 
+  it("accepts the AutoOps RESOLVED spelling for close events", () => {
+    expect(normalizeStatus("RESOLVED")).toBe("closed");
+    expect(normalizeStatus("resolved")).toBe("closed");
+    expect(normalizeStatus("Resolved")).toBe("closed");
+  });
+
   it("returns unknown for empty/garbage", () => {
     expect(normalizeStatus(undefined)).toBe("unknown");
     expect(normalizeStatus("")).toBe("unknown");

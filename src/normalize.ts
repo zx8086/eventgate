@@ -21,11 +21,12 @@ export function severityRank(value: Severity): SeverityRank {
 }
 
 // AutoOps docs spell STATUS as "open" or "close" but operators often template
-// the body with "opened"/"closed" too. Accept both spellings.
+// the body with "opened"/"closed", and AutoOps also emits "RESOLVED" for close
+// events. Accept all spellings case-insensitively.
 export function normalizeStatus(value: string | undefined): EventType {
   const v = (value ?? "").toLowerCase();
   if (v === "open" || v === "opened") return "opened";
-  if (v === "close" || v === "closed") return "closed";
+  if (v === "close" || v === "closed" || v === "resolved") return "closed";
   return "unknown";
 }
 
