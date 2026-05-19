@@ -45,7 +45,6 @@ jobs:
         with:
           driver: cloud
           endpoint: zx8086/cldbuild
-          install: true
 
       - id: meta
         uses: docker/metadata-action@v6
