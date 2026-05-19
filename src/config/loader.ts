@@ -26,8 +26,17 @@ function mergeDeep<T extends object>(base: T, overrides: unknown): T {
 
 export function buildConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const overrides: EnvOverrides = mapEnv(env);
-  const merged = mergeDeep(defaults as unknown as AppConfig, overrides);
-  const result = configSchema.safeParse(merged);
+
+  // `routes` is replace-not-merge. Pull it out, merge the rest deeply,
+  // then attach `routes` separately (env wins; otherwise defaults stand).
+  const { routes: routesOverride, ...rest } = overrides;
+  const merged = mergeDeep(defaults as unknown as AppConfig, rest);
+  const withRoutes: AppConfig = {
+    ...merged,
+    routes: (routesOverride ?? (defaults as unknown as AppConfig).routes) as AppConfig["routes"],
+  };
+
+  const result = configSchema.safeParse(withRoutes);
   if (!result.success) {
     const summary = result.error.issues
       .map((i) => `  - ${i.path.join(".") || "<root>"}: ${i.message}`)

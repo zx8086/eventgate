@@ -47,6 +47,16 @@ export const defaults = {
     busyPollMs: 250,
     backlogWarnThreshold: 50_000,
   },
+  routes: [
+    {
+      name: "elastic-autoops",
+      path: "/webhooks/elastic/autoops",
+      topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      keyFields: ["resourceId", "deployment-id"],
+      idempotency: "elastic-autoops",
+    },
+  ],
 } as const;
 
 export type Defaults = typeof defaults;

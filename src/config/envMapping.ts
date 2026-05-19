@@ -23,6 +23,7 @@ export type EnvOverrides = {
     busyPollMs?: number;
     backlogWarnThreshold?: number;
   };
+  routes?: unknown[];
 };
 
 function str(v: string | undefined): string | undefined {
@@ -52,6 +53,18 @@ function csv(v: string | undefined): string[] | undefined {
   if (s === undefined) return undefined;
   const parts = s.split(",").map((p) => p.trim()).filter(Boolean);
   return parts.length > 0 ? parts : undefined;
+}
+
+function jsonArray(v: string | undefined): unknown[] | undefined {
+  const s = str(v);
+  if (s === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(s);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }
 
 function filterUndefined<T extends object>(obj: T): Partial<T> {
@@ -113,6 +126,11 @@ export function mapEnv(env: RawEnv): EnvOverrides {
       backlogWarnThreshold: num(env.OUTBOX_BACKLOG_WARN),
     }),
   };
+
+  const routes = jsonArray(env.ROUTES_JSON);
+  if (routes !== undefined) {
+    overrides.routes = routes;
+  }
 
   for (const k of Object.keys(overrides) as (keyof EnvOverrides)[]) {
     const section = overrides[k];
