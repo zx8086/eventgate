@@ -96,4 +96,16 @@ describe("buildRoutes with multiple routes", () => {
     const res = healthz();
     expect(res.status).toBe(200);
   });
+
+  it("healthz includes the registered routes", async () => {
+    const outbox = fakeOutbox();
+    const routes = buildRoutes({ producer: noopProducer, outbox });
+    const healthz = routes["/healthz"] as () => Response;
+    const res = healthz();
+    const payload = await res.json() as { routes?: Array<{ name: string; path: string; topic: string; dlqTopic?: string }> };
+    expect(payload.routes).toEqual([
+      { name: "elastic-autoops", path: "/webhooks/elastic/autoops", topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", dlqTopic: undefined },
+      { name: "datadog-alerts", path: "/webhooks/datadog/alerts", topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS", dlqTopic: undefined },
+    ]);
+  });
 });

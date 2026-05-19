@@ -34,6 +34,12 @@ export function buildRoutes(deps: RouteDeps): RoutesMap {
                 oldestPendingAgeMs: stats.oldestPendingAgeMs,
               }
             : { enabled: false },
+          routes: config.routes.map((r) => ({
+            name: r.name,
+            path: r.path,
+            topic: r.topic,
+            dlqTopic: r.dlqTopic,
+          })),
         },
         { status: producerOk ? 200 : 503 },
       );
