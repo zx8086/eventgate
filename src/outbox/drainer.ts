@@ -2,7 +2,6 @@
 import { getLogger } from "../logging/index.ts";
 import { nextDelayMs } from "./backoff.ts";
 import type { OutboxDatabase } from "./db.ts";
-import type { OutboxTopic } from "./schemas.ts";
 
 const log = getLogger("outbox.drainer");
 
@@ -16,7 +15,6 @@ export type DrainerProducer = {
 };
 
 export type DrainerConfig = {
-  topics: { raw: string };
   batchSize: number;
   backoffMaxMs: number;
   maxAgeMs: number;
@@ -44,13 +42,6 @@ type PendingRow = {
   attempts: number;
   created_at: number;
 };
-
-function topicToKafka(topic: OutboxTopic, topics: DrainerConfig["topics"]): string {
-  switch (topic) {
-    case "raw":
-      return topics.raw;
-  }
-}
 
 function parseHeaders(raw: string | null): Record<string, string> | null {
   if (raw === null) return null;
@@ -98,7 +89,7 @@ export async function runOutboxIteration(opts: {
   let failedPermanently = 0;
 
   for (const row of pending) {
-    const kafkaTopic = topicToKafka(row.topic as OutboxTopic, config.topics);
+    const kafkaTopic = row.topic;
     const headers = parseHeaders(row.headers);
     try {
       await producer.sendByTopic(kafkaTopic, row.message_key, row.payload, headers);

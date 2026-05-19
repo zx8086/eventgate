@@ -25,10 +25,7 @@ function makeFakeProducer(failuresPerTopic: Record<string, number> = {}) {
   return { sendByTopic, sent };
 }
 
-const topics = { raw: "raw.t" };
-
 const cfg = {
-  topics,
   batchSize: 100,
   backoffMaxMs: 600_000,
   maxAgeMs: 24 * 60 * 60 * 1_000,
@@ -36,9 +33,9 @@ const cfg = {
 
 function seedTwoPending(writer: { enqueue(row: EnqueueInput): void }): [EnqueueInput, EnqueueInput] {
   const rows: [EnqueueInput, EnqueueInput] = [
-    { topic: "raw", messageKey: "k1", payload: JSON.stringify({ raw: 1 }), headers: null },
+    { topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", messageKey: "k1", payload: JSON.stringify({ raw: 1 }), headers: null },
     {
-      topic: "raw",
+      topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
       messageKey: "k2",
       payload: JSON.stringify({ raw: 2 }),
       headers: { idempotencyKey: "abc" },
@@ -66,8 +63,11 @@ describe("runOutboxIteration", () => {
     expect(result.published).toBe(2);
     expect(result.retried).toBe(0);
     expect(result.failedPermanently).toBe(0);
-    // Outbox only routes to topics.raw today (SIO-801); both distinct rows shipped in order.
-    expect(producer.sent.map((s) => s.topic)).toEqual(["raw.t", "raw.t"]);
+    // Drainer publishes to row.topic directly; both rows use the same topic.
+    expect(producer.sent.map((s) => s.topic)).toEqual([
+      "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    ]);
     expect(producer.sent.map((s) => s.key)).toEqual(["k1", "k2"]);
 
     const rows = db.query("SELECT status FROM outbox").all() as Array<{ status: string }>;
@@ -78,7 +78,7 @@ describe("runOutboxIteration", () => {
     const writer = createWriter(db);
     seedTwoPending(writer);
 
-    const producer = makeFakeProducer({ "raw.t": 2 });
+    const producer = makeFakeProducer({ "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS": 2 });
     const before = Date.now();
     const result = await runOutboxIteration({ db, producer, config: cfg });
 
@@ -107,7 +107,7 @@ describe("runOutboxIteration", () => {
       now: Date.now(),
     });
 
-    const producer = makeFakeProducer({ "raw.t": 5 });
+    const producer = makeFakeProducer({ "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS": 5 });
     const result = await runOutboxIteration({ db, producer, config: cfg });
 
     expect(result.failedPermanently).toBe(2);
