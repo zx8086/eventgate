@@ -25,7 +25,7 @@ function makeFakeProducer(failuresPerTopic: Record<string, number> = {}) {
   return { sendByTopic, sent };
 }
 
-const topics = { raw: "raw.t", events: "events.t", dlq: "dlq.t" };
+const topics = { raw: "raw.t" };
 
 const cfg = {
   topics,
@@ -34,21 +34,19 @@ const cfg = {
   maxAgeMs: 24 * 60 * 60 * 1_000,
 };
 
-function pair(): [EnqueueInput, EnqueueInput] {
-  return [
+function seedTwoPending(writer: { enqueue(row: EnqueueInput): void }): [EnqueueInput, EnqueueInput] {
+  const rows: [EnqueueInput, EnqueueInput] = [
     { topic: "raw", messageKey: "k1", payload: JSON.stringify({ raw: 1 }), headers: null },
     {
       topic: "raw",
-      messageKey: "k1",
+      messageKey: "k2",
       payload: JSON.stringify({ raw: 2 }),
       headers: { idempotencyKey: "abc" },
     },
   ];
-}
-
-function enqueueBoth(writer: { enqueue(row: EnqueueInput): void }, rows: [EnqueueInput, EnqueueInput]): void {
   writer.enqueue(rows[0]);
   writer.enqueue(rows[1]);
+  return rows;
 }
 
 let db: OutboxDatabase;
@@ -60,7 +58,7 @@ afterEach(() => closeOutbox(db));
 describe("runOutboxIteration", () => {
   test("publishes pending rows and marks them dispatched", async () => {
     const writer = createWriter(db);
-    enqueueBoth(writer, pair());
+    seedTwoPending(writer);
 
     const producer = makeFakeProducer();
     const result = await runOutboxIteration({ db, producer, config: cfg });
@@ -68,8 +66,9 @@ describe("runOutboxIteration", () => {
     expect(result.published).toBe(2);
     expect(result.retried).toBe(0);
     expect(result.failedPermanently).toBe(0);
-    // Outbox only routes to topics.raw today (SIO-801).
+    // Outbox only routes to topics.raw today (SIO-801); both distinct rows shipped in order.
     expect(producer.sent.map((s) => s.topic)).toEqual(["raw.t", "raw.t"]);
+    expect(producer.sent.map((s) => s.key)).toEqual(["k1", "k2"]);
 
     const rows = db.query("SELECT status FROM outbox").all() as Array<{ status: string }>;
     expect(rows.every((r) => r.status === "dispatched")).toBe(true);
@@ -77,7 +76,7 @@ describe("runOutboxIteration", () => {
 
   test("schedules retry with exponential backoff on transient failure", async () => {
     const writer = createWriter(db);
-    enqueueBoth(writer, pair());
+    seedTwoPending(writer);
 
     const producer = makeFakeProducer({ "raw.t": 2 });
     const before = Date.now();
@@ -101,7 +100,7 @@ describe("runOutboxIteration", () => {
 
   test("marks row failed when older than maxAgeMs", async () => {
     const writer = createWriter(db);
-    enqueueBoth(writer, pair());
+    seedTwoPending(writer);
     // backdate created_at past the age threshold
     db.query("UPDATE outbox SET created_at = $oldCreated, next_attempt_at = $now").run({
       oldCreated: Date.now() - 25 * 60 * 60 * 1_000,
@@ -118,7 +117,7 @@ describe("runOutboxIteration", () => {
 
   test("skips rows whose next_attempt_at is in the future", async () => {
     const writer = createWriter(db);
-    enqueueBoth(writer, pair());
+    seedTwoPending(writer);
     db.query("UPDATE outbox SET next_attempt_at = $next").run({ next: Date.now() + 60_000 });
 
     const producer = makeFakeProducer();
@@ -130,7 +129,7 @@ describe("runOutboxIteration", () => {
 
   test("respects batchSize", async () => {
     const writer = createWriter(db);
-    for (let i = 0; i < 3; i++) enqueueBoth(writer, pair());
+    for (let i = 0; i < 3; i++) seedTwoPending(writer);
 
     const producer = makeFakeProducer();
     const result = await runOutboxIteration({
@@ -145,7 +144,7 @@ describe("runOutboxIteration", () => {
 
   test("parses and forwards headers JSON", async () => {
     const writer = createWriter(db);
-    enqueueBoth(writer, pair());
+    seedTwoPending(writer);
     const producer = makeFakeProducer();
     await runOutboxIteration({ db, producer, config: cfg });
     const withHeaders = producer.sent.find((s) => s.headers !== null);

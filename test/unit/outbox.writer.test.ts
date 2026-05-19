@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+// test/unit/outbox.writer.test.ts
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../../src/outbox/db.ts";
 import { createWriter } from "../../src/outbox/writer.ts";
 
@@ -7,6 +8,7 @@ let db: OutboxDatabase;
 beforeEach(() => {
   db = openOutbox(":memory:");
 });
+afterEach(() => closeOutbox(db));
 
 describe("createWriter.enqueue", () => {
   it("inserts a single pending row with the given fields", () => {
@@ -24,7 +26,6 @@ describe("createWriter.enqueue", () => {
     expect(row.attempts).toBe(0);
     expect(row.payload).toBe(JSON.stringify({ a: 1 }));
     expect(row.headers).toBe(JSON.stringify({ source: "elastic-autoops" }));
-    closeOutbox(db);
   });
 
   it("stores headers as null when none provided", () => {
@@ -37,14 +38,12 @@ describe("createWriter.enqueue", () => {
     });
     const row = db.query("SELECT headers FROM outbox").get() as { headers: string | null };
     expect(row.headers).toBeNull();
-    closeOutbox(db);
   });
 
   it("rejects unsupported topic values at the writer boundary", () => {
     const writer = createWriter(db);
     // @ts-expect-error — runtime guard, type forbids this
     expect(() => writer.enqueue({ topic: "events", messageKey: "k", payload: "{}", headers: null })).toThrow();
-    closeOutbox(db);
   });
 });
 
@@ -58,12 +57,10 @@ describe("createWriter.backlogStats", () => {
     expect(stats.pending).toBe(1);
     expect(stats.failed).toBe(1);
     expect(stats.oldestPendingAgeMs).toBeGreaterThanOrEqual(0);
-    closeOutbox(db);
   });
 
   it("returns oldestPendingAgeMs=0 when nothing pending", () => {
     const writer = createWriter(db);
     expect(writer.backlogStats()).toEqual({ pending: 0, failed: 0, oldestPendingAgeMs: 0 });
-    closeOutbox(db);
   });
 });
