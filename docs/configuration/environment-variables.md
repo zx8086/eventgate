@@ -4,7 +4,7 @@
 > **Last updated:** 2026-05-19
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
-Reference for every environment variable eventgate reads, with default, scope, and which process needs it. Configuration follows the 4-pillar pattern — defaults in `src/config/defaults.ts`, env-var → field mapping in `src/config/envMapping.ts`, validation in `src/config/schemas.ts`, lazy validation via `src/config/loader.ts`. Bun loads `.env` files automatically; no `dotenv` package is used.
+Reference for every environment variable eventgate reads, with default and purpose. Configuration follows the 4-pillar pattern — defaults in `src/config/defaults.ts`, env-var → field mapping in `src/config/envMapping.ts`, validation in `src/config/schemas.ts`, lazy validation via `src/config/loader.ts`. Bun loads `.env` files automatically; no `dotenv` package is used.
 
 For the project-agnostic 4-pillar pattern see [../../guides/4-pillar-configuration-guide.md](../../guides/4-pillar-configuration-guide.md).
 
@@ -15,53 +15,63 @@ For the project-agnostic 4-pillar pattern see [../../guides/4-pillar-configurati
 3. `loader.ts` merges defaults with overrides and validates the result through `configSchema.safeParse()`.
 4. `config` is a Proxy — validation runs the first time any field is read, not at module import. Tests call `resetConfigCache()` to re-run validation against new env.
 
-Boolean variables accept `"true"` or `"false"` (case-insensitive). Comma-separated lists are trimmed and empty entries are dropped.
+Comma-separated lists are trimmed and empty entries are dropped.
 
 ## Application
 
-| Variable | Default | Process | Description |
-|----------|---------|---------|-------------|
-| `ENVIRONMENT` | `dev` | both | One of `dev`, `staging`, `prod`, `test`. Triggers production safety refinements (see Production Safety Refinements). |
-| `TENANT` | `elastic-cloud` | both | Logical tenant; flows onto every normalized event. |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENVIRONMENT` | `dev` | One of `dev`, `staging`, `prod`, `test`. Triggers production safety refinements. |
+| `TENANT` | `elastic-cloud` | Logical tenant; flows onto every normalized event. |
 
-## Server (gateway only)
+## Server
 
-| Variable | Default | Process | Description |
-|----------|---------|---------|-------------|
-| `PORT` | `3000` | gateway | HTTP port for `Bun.serve()`. |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | HTTP port for `Bun.serve()`. |
 
-## Kafka
+## Kafka (all providers)
 
-| Variable | Default | Process | Description |
-|----------|---------|---------|-------------|
-| `KAFKA_BROKERS` | `localhost:9092` | both | Comma-separated bootstrap brokers. |
-| `KAFKA_CLIENT_ID_GATEWAY` | `eventgate-gateway` | gateway | Client id for the producer. |
-| `KAFKA_CLIENT_ID_WRITER` | `eventgate-writer` | writer | Client id for the consumer and DLQ producer. |
-| `KAFKA_GROUP_ID` | `autoops-couchbase-writer-v1` | writer | Consumer group id on `events.v1`. |
-| `KAFKA_AUTH` | `none` | both | `none` for local Redpanda, `iam` for AWS MSK Serverless. Required to be `iam` when `ENVIRONMENT=prod`. |
-| `KAFKA_REGION` | unset | both | AWS region for MSK IAM SASL token signing. Required when `KAFKA_AUTH=iam`. |
-| `KAFKA_TOPIC_RAW` | `ops.elastic.autoops.raw.v1` | gateway | Topic for verbatim webhook bodies. |
-| `KAFKA_TOPIC_EVENTS` | `ops.elastic.autoops.events.v1` | both | Topic for normalized events. |
-| `KAFKA_TOPIC_DLQ` | `ops.elastic.autoops.dlq.v1` | writer | DLQ topic for malformed messages. |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFKA_PROVIDER` | `local` | One of `local`, `msk`, `confluent`. See [../architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md). |
+| `KAFKA_CLIENT_ID` | `eventgate-gateway` | Client id for the producer. |
+| `KAFKA_TOPIC_RAW` | `ops.elastic.autoops.raw.v1` | Topic for verbatim webhook bodies. |
+| `KAFKA_TOPIC_EVENTS` | `ops.elastic.autoops.events.v1` | Topic for normalized events. |
+| `KAFKA_TOPIC_DLQ` | `ops.elastic.autoops.dlq.v1` | DLQ topic (reserved for downstream consumers). |
 
-## Couchbase
+## Local provider
 
-| Variable | Default | Process | Description |
-|----------|---------|---------|-------------|
-| `COUCHBASE_ENABLED` | `true` | writer | When `false`, the writer logs events and skips Couchbase entirely. Used to deploy the writer before Capella is provisioned. |
-| `COUCHBASE_CONNSTR` | `couchbase://localhost` | writer | Connection string. Must start with `couchbase://` or `couchbases://`. In `prod`, `couchbases://` (TLS) is required and `localhost` is rejected. |
-| `COUCHBASE_USERNAME` | `Administrator` | writer | Cluster username. |
-| `COUCHBASE_PASSWORD` | `password` | writer | Cluster password. The literal `"password"` is rejected when `ENVIRONMENT=prod`. |
-| `COUCHBASE_BUCKET` | `ops` | writer | Bucket name. |
-| `COUCHBASE_SCOPE` | `_default` | writer | Scope name. |
-| `COUCHBASE_HISTORY_COLLECTION` | `autoops_events` | writer | Collection for append-only history docs. |
-| `COUCHBASE_STATE_COLLECTION` | `autoops_state` | writer | Collection for rolling state docs. |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFKA_LOCAL_BOOTSTRAP_SERVERS` | `localhost:9092` | Comma-separated bootstrap brokers. |
+
+## AWS MSK provider
+
+Required when `KAFKA_PROVIDER=msk`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MSK_REGION` | (unset) | AWS region of the cluster. Required. |
+| `MSK_CLUSTER_ARN` | (unset) | Cluster ARN. Brokers are discovered via `GetBootstrapBrokersCommand`. One of `MSK_CLUSTER_ARN` / `MSK_BROKERS` required. |
+| `MSK_BROKERS` | (unset) | CSV bootstrap brokers. Skips discovery. One of `MSK_CLUSTER_ARN` / `MSK_BROKERS` required. |
+| `MSK_AUTH_MODE` | `iam` | `iam` (SASL/OAUTHBEARER + TLS) \| `tls` (TLS only) \| `none` (PLAINTEXT). |
+
+## Confluent Cloud provider
+
+Required when `KAFKA_PROVIDER=confluent`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONFLUENT_BOOTSTRAP_SERVERS` | (unset) | Bootstrap servers (host:port[,host:port]). |
+| `CONFLUENT_API_KEY` | (unset) | SASL/PLAIN username. |
+| `CONFLUENT_API_SECRET` | (unset) | SASL/PLAIN password. |
 
 ## Observability
 
-| Variable | Default | Process | Description |
-|----------|---------|---------|-------------|
-| `LOG_LEVEL` | `info` | both | One of `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `silent`. Test suite forces `silent` via `test/preload.ts`. |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `info` | One of `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `silent`. Test suite forces `silent` via `test/preload.ts`. |
 
 See [../operations/logging.md](../operations/logging.md) for output format and recommended levels per environment.
 
@@ -69,27 +79,25 @@ See [../operations/logging.md](../operations/logging.md) for output format and r
 
 When `ENVIRONMENT=prod`, `src/config/schemas.ts` runs additional checks via `.superRefine()`:
 
-| Refinement | Reason |
-|------------|--------|
-| `kafka.auth` must be `iam` | MSK Serverless requires IAM SASL |
-| `kafka.brokers` must not contain `localhost` | Catches stale env that would silently disconnect |
-| `couchbase.connStr` must start with `couchbases://` | TLS-only against Capella |
-| `couchbase.connStr` must not contain `localhost` | Catches stale env that would silently disconnect |
-| `couchbase.password` must not be `"password"` | Default credential leak guard |
+| Rule | Reason |
+|------|--------|
+| `KAFKA_PROVIDER` must not be `local` | Prevents accidentally pointing at developer-laptop brokers in prod |
+| `msk` requires `MSK_REGION` plus `MSK_CLUSTER_ARN` or `MSK_BROKERS` | Catches half-configured MSK env early at startup |
+| `confluent` requires the full triplet | Catches missing API credentials early at startup |
 
-If `COUCHBASE_ENABLED=false`, the Couchbase refinements are skipped — the writer is allowed to deploy without a real cluster.
-
-You can manually probe the refinements with:
+Manually probe the refinements:
 
 ```bash
-ENVIRONMENT=prod COUCHBASE_CONNSTR=couchbase://localhost bun run start:gateway
+ENVIRONMENT=prod KAFKA_PROVIDER=local bun run start:gateway
+ENVIRONMENT=prod KAFKA_PROVIDER=msk MSK_REGION=eu-central-1 bun run start:gateway
+ENVIRONMENT=prod KAFKA_PROVIDER=confluent bun run start:gateway
 ```
 
-Expected: exit with a Zod error citing `localhost` on `couchbase.connStr`.
+All three should exit with a Zod refinement error.
 
 ## Local Development Defaults
 
-`docker-compose.yml` advertises Redpanda on `localhost:9092` and Couchbase on `localhost:11210`/`8091`, which matches every default above. A minimal `.env` for local development:
+`docker-compose.yml` advertises Redpanda on `localhost:9092`, which matches the local-provider default. A minimal `.env` for local development:
 
 ```bash
 # .env
@@ -97,26 +105,12 @@ ENVIRONMENT=dev
 LOG_LEVEL=debug
 ```
 
-`.env.example` in the repo root holds the full set of variables a deployment is likely to override. Treat `.env.example` as documentation only — do not commit real secrets to it.
-
-## AWS Production Defaults
-
-The ECS task definitions in `scripts/deploy/10-register-task-defs.sh` inject this environment block on both containers:
-
-```bash
-ENVIRONMENT=prod
-KAFKA_AUTH=iam
-KAFKA_REGION=<aws-region>
-KAFKA_BROKERS=<msk-bootstrap-string>
-COUCHBASE_ENABLED=false
-LOG_LEVEL=info
-```
-
-When Couchbase Capella is provisioned and joined to the VPC, replace the writer's `COUCHBASE_ENABLED=false` with the Capella connection string, TLS-prefixed.
+`.env.example` in the repo root holds the full set of variables a deployment is likely to override, with commented stanzas for MSK and Confluent. Treat `.env.example` as documentation only — do not commit real secrets to it.
 
 ## See Also
 
 - [architecture/overview.md](../architecture/overview.md) — how each setting maps to runtime behaviour.
+- [architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md) — the provider abstraction these env vars feed.
 - [deployment/aws-ecs.md](../deployment/aws-ecs.md) — where the production environment block is set.
 - [../../guides/4-pillar-configuration-guide.md](../../guides/4-pillar-configuration-guide.md) — project-agnostic pattern reference.
 
@@ -125,3 +119,4 @@ When Couchbase Capella is provisioned and joined to the VPC, replace the writer'
 | Date | Change |
 |------|--------|
 | 2026-05-19 | Initial environment variable reference created |
+| 2026-05-19 | Replaced Couchbase + KAFKA_BROKERS/AUTH/REGION with Kafka provider factory env vars (SIO-795) |

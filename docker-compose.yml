@@ -36,19 +36,3 @@ services:
         rpk -X brokers=redpanda:9092 topic create ops.elastic.autoops.raw.v1 -p 3 || true
         rpk -X brokers=redpanda:9092 topic create ops.elastic.autoops.events.v1 -p 3 || true
         rpk -X brokers=redpanda:9092 topic create ops.elastic.autoops.dlq.v1 -p 1 || true
-
-  couchbase:
-    image: couchbase/server:7.6.2
-    container_name: eventgate-couchbase
-    ports:
-      - "8091-8096:8091-8096"
-      - "11210:11210"
-    ulimits:
-      nofile:
-        soft: 40960
-        hard: 40960
-    volumes:
-      - couchbase-data:/opt/couchbase/var
-
-volumes:
-  couchbase-data:

@@ -2,11 +2,15 @@
 import { config } from "../config/index.ts";
 import { getLogger } from "../logging/index.ts";
 import { createProducer } from "../kafka/producer.ts";
+import { createKafkaProvider } from "../kafka/providers/index.ts";
 import { buildRoutes } from "./routes.ts";
 
 const log = getLogger("gateway");
 
-const producer = await createProducer(config.kafka.clientIdGateway);
+const provider = createKafkaProvider(config);
+log.info({ provider: provider.name, providerType: provider.type }, "kafka provider selected");
+
+const producer = await createProducer(config.kafka.clientId, provider);
 
 const server = Bun.serve({
   port: config.server.port,
@@ -38,6 +42,7 @@ async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
   server.stop();
   await producer.disconnect();
+  await provider.close();
   process.exit(0);
 }
 

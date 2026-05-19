@@ -6,11 +6,11 @@ Project-specific documentation lives under `docs/` (index at `docs/README.md`), 
 
 ## Project Overview
 
-eventgate is a Bun ingestion service for Elastic AutoOps webhook notifications. Two independent processes share configuration and types but only ever communicate through Kafka. Flow: Elastic AutoOps → HTTP gateway (Bun.serve) → Kafka (Redpanda locally) → Couchbase writer → `autoops_events` (history) + `autoops_state` (rolling state).
+eventgate is a single-process Bun ingestion service for Elastic AutoOps webhook notifications. Flow: Elastic AutoOps → HTTP gateway (Bun.serve) → Kafka (Redpanda locally / AWS MSK / Confluent Cloud). Anything downstream of Kafka (alerting, projection, storage) lives in other services as separate consumers on the events topic.
 
 ## Current State
 
-Single-package Bun project (no workspaces). Conforms to the team `guides/` for: Zod v4 schemas with `.describe()` and `.safeParse()` at boundaries, the 4-pillar configuration pattern (`src/config/{defaults,envMapping,schemas,loader,index}.ts`), Pino 10 + ECS NDJSON logging via `@elastic/ecs-pino-format` with a synchronous Bun-compatible destination, and `bunfig.toml` test wiring with a silent-log preload. Tests live under `test/unit/`. Phases that are explicitly deferred: OpenTelemetry instrumentation (Phase 3), Couchbase Capella hardening — TLS-only config, timeout profiles, error classification, circuit breaker (Phase 4), and webhook auth.
+Single-package Bun project (no workspaces). Conforms to the team `guides/` for: Zod v4 schemas with `.describe()` and `.safeParse()` at boundaries, the 4-pillar configuration pattern (`src/config/{defaults,envMapping,schemas,loader,index}.ts`), Pino 10 + ECS NDJSON logging via `@elastic/ecs-pino-format` with a synchronous Bun-compatible destination, and `bunfig.toml` test wiring with a silent-log preload. Tests live under `test/unit/`. Kafka backend selection is abstracted behind a `KafkaProvider` factory (`src/kafka/providers/`) — local Redpanda, AWS MSK (IAM/TLS/none), or Confluent Cloud (SASL/PLAIN + TLS). Phases explicitly deferred: OpenTelemetry instrumentation, webhook auth.
 
 ## Architecture
 
@@ -18,17 +18,18 @@ Single-package Bun project (no workspaces). Conforms to the team `guides/` for: 
 src/
   config/                 4-pillar config (defaults, envMapping, schemas, loader, index)
   gateway/                Bun.serve HTTP receiver
-    index.ts              entry point
+    index.ts              entry point — wires KafkaProvider + EventProducer
     routes.ts             object-style routes (Bun 1.2+)
     schema.ts             Zod v4 webhook schema with .describe()
-  writer/
-    index.ts              kafkajs consumer + Couchbase projector
   kafka/
-    producer.ts           EventProducer factory (publishRaw/Normalized/Dlq)
-    consumer.ts           kafkajs consumer factory
-  couchbase/
-    client.ts             couchbase.connect + scope/collection handles
-    projection.ts         pure functions for doc keys + evolveState
+    producer.ts           EventProducer wrapping @platformatic/kafka Producer
+    providers/
+      types.ts            KafkaProvider, KafkaConnectionConfig, MskAuthMode
+      errors.ts           KafkaProviderError + ProviderErrorCode
+      local.ts            PLAINTEXT, no SASL/TLS
+      msk.ts              SASL/OAUTHBEARER + TLS (IAM); broker discovery; 60s token cache
+      confluent.ts        SASL/PLAIN + TLS
+      index.ts            createKafkaProvider(config) factory
   logging/
     index.ts              ILogger + Pino+ECS factory (sync destination)
   normalize.ts            pure normalization (severity, status, ids)
@@ -37,34 +38,39 @@ test/
   preload.ts              sets LOG_LEVEL=silent for bun test
   unit/
     normalize.test.ts
-    projection.test.ts
+    config.kafka-provider.test.ts
+    kafka.providers.factory.test.ts
+    kafka.providers.msk.test.ts
 ```
 
-### Two-process model
+### Single-process model
 
 | Process | Entry | Responsibility |
 |---|---|---|
-| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — validate (Zod `.safeParse`), normalize, publish raw + normalized events, return 202. `/healthz` reports producer status. 503 on Kafka publish failure (never silently drop). |
-| **writer** | `src/writer/index.ts` | kafkajs consumer on `ops.elastic.autoops.events.v1` (group `autoops-couchbase-writer-v1`). Upserts history doc + rolling state doc per message. Parse failures and missing required fields go to `ops.elastic.autoops.dlq.v1` — the consumer never throws on bad messages. |
+| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — validate (Zod `.safeParse`), normalize, publish raw + normalized events, return 202. `/healthz` reports producer status (503 when disconnected). Kafka publish failures are logged at `warn` but still return 202 (receive-fast, process-async). |
 
-The gateway and writer never call each other in-process — Kafka is the only coupling. Add new downstream behavior (Slack, PagerDuty, aggregates) as a **separate consumer group** on the events topic, not bolted into the writer.
+Add new downstream behavior (Slack, PagerDuty, aggregates, sinks into a database) as a **separate consumer group** on `ops.elastic.autoops.events.v1` in another service — never bolt it into the gateway.
 
 ### Kafka topics
 
 - `ops.elastic.autoops.raw.v1` — verbatim webhook body for replay.
 - `ops.elastic.autoops.events.v1` — normalized events. Headers (`source`, `eventType`, `severity`, `schemaVersion`, `idempotencyKey`) let consumers filter without parsing the body.
-- `ops.elastic.autoops.dlq.v1` — malformed messages from the writer.
+- `ops.elastic.autoops.dlq.v1` — DLQ slot reserved for downstream consumers.
 
-### Couchbase doc model
+### Kafka provider factory
 
-- `autoops_events` (append-only history) — key `autoops::event::<resourceId>::<occurredAt>::<idempotencyKey>`.
-- `autoops_state` (rolling state per alert) — key `autoops::state::<resourceId>::<alertSignature>`.
-- `evolveState` (in `src/couchbase/projection.ts`) is the **only** place that constructs an `AutoOpsStateDoc`. The writer calls it with the previous doc (or `null`) and the new event.
+Selected by `KAFKA_PROVIDER`. The factory (`src/kafka/providers/index.ts:createKafkaProvider`) dispatches on the value and returns a `KafkaProvider` that exposes `getConnectionConfig()` and `close()`. The producer (`src/kafka/producer.ts`) is provider-agnostic.
+
+- **local**: `KAFKA_LOCAL_BOOTSTRAP_SERVERS` (default `localhost:9092`).
+- **msk**: `MSK_REGION` + (`MSK_CLUSTER_ARN` or `MSK_BROKERS`); optional `MSK_AUTH_MODE` (iam/tls/none, default iam). AWS SDK + signer are lazy-imported so non-MSK runs don't load them.
+- **confluent**: `CONFLUENT_BOOTSTRAP_SERVERS` + `CONFLUENT_API_KEY` + `CONFLUENT_API_SECRET`.
+
+Portable pattern lives at `guides/kafka-provider-factory.md`. Project-specific application at `docs/architecture/kafka-provider-factory.md`.
 
 ### Normalization contract (`src/normalize.ts`)
 
-- `alertSignature = slugify(resourceId :: title)` — groups opened+closed of the same alert into one state doc.
-- `idempotencyKey = sha256(resourceId :: title :: status :: startTime :: endTime)` — retries upsert the same history doc; opened+closed pair produces two distinct history docs because `status` differs.
+- `alertSignature = slugify(resourceId :: title)` — stable across the open + close pair of the same alert; useful for downstream rollup.
+- `idempotencyKey = sha256(resourceId :: title :: status :: startTime :: endTime)` — stable across retries of the same delivery; differs between the open and close of the same alert because `status` differs.
 - AutoOps docs spell status `open` / `close`; operator templates often emit `opened` / `closed`. `normalizeStatus` accepts both and emits `opened` | `closed` | `unknown`.
 
 ## Config shape (4-pillar)
@@ -72,14 +78,16 @@ The gateway and writer never call each other in-process — Kafka is the only co
 ```
 config.app.{name, version, environment, tenant}
 config.server.{port}
-config.kafka.{brokers, clientIdGateway, clientIdWriter, groupId, topics:{raw, events, dlq}}
-config.couchbase.{connStr, username, password, bucket, scope, historyCollection, stateCollection}
+config.kafka.{provider, clientId, topics:{raw, events, dlq}, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
 config.observability.{logLevel}
 ```
 
-- `src/config/defaults.ts` — every key has a default; `version` comes from `package.json`.
+- `src/config/defaults.ts` — every key has a default; `version` comes from `package.json`. Default provider is `local`.
 - `src/config/envMapping.ts` — explicit env-var → field mapping; returns deep-partial overrides.
-- `src/config/schemas.ts` — Zod v4 `strictObject` + `.superRefine()` prod-safety: no `localhost` in `couchbase.connStr` / `kafka.brokers` when `app.environment === "prod"`, `couchbases://` required, default password forbidden.
+- `src/config/schemas.ts` — Zod v4 `strictObject` + `.superRefine()` cross-field rules:
+  - `provider=msk` requires `msk.region` AND (`msk.clusterArn` OR `msk.brokers`).
+  - `provider=confluent` requires `confluent.bootstrapServers` + `apiKey` + `apiSecret`.
+  - `app.environment=prod` forbids `provider=local`.
 - `src/config/loader.ts` — merge defaults + env, validate via `.safeParse()`, lazy Proxy singleton with `resetConfigCache()` for tests.
 
 `config` is a Proxy — validation runs the first time any field is read, not at module import.
@@ -88,19 +96,15 @@ config.observability.{logLevel}
 
 ```bash
 bun install
-docker compose up -d                                # Redpanda + Couchbase, topics auto-created
+docker compose up -d                                # Redpanda; topics auto-created
 bun run dev:gateway                                 # watch mode, port 3000
-bun run dev:writer                                  # watch mode
 bun run start:gateway                               # no watch
-bun run start:writer                                # no watch
 bun test                                            # all tests, silent (LOG_LEVEL=silent via preload)
 bun test test/unit/normalize.test.ts                # single file
 bun test -t "buildIdempotencyKey"                   # by test name
 bun run typecheck                                   # tsc --noEmit
-docker compose down                                 # stop services (add -v to drop Couchbase volume)
+docker compose down                                 # stop services
 ```
-
-Before first run after `docker compose up -d`: create bucket `ops` and collections `autoops_events` and `autoops_state` under `_default` scope via the Couchbase UI at http://localhost:8091 (Administrator / password). Redpanda creates topics automatically via `redpanda-init`.
 
 ## Linear Project
 
@@ -118,7 +122,7 @@ Before first run after `docker compose up -d`: create bucket `ops` and collectio
 - **NEVER commit** without explicit user authorization (slash commands count as authorization).
 - **NEVER push to `main`** directly for code changes — all code goes through PR review.
 - Token usage and budget are NOT your concern — execute instructions as given.
-- Always check ports before starting servers: `lsof -i :3000` (gateway), `lsof -i :9092` (Kafka), `lsof -i :8091` (Couchbase UI).
+- Always check ports before starting servers: `lsof -i :3000` (gateway), `lsof -i :9092` (Kafka).
 - Kill background processes when finished.
 
 ### Code
@@ -148,16 +152,12 @@ ALWAYS REMOVE: multi-line file header JSDoc, JSDoc restating function/parameter 
 
 ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments (non-obvious algorithm explanations, alert signature / idempotency key reasoning), references to incident tickets if added later.
 
-### Idempotency
-
-The writer **must** stay idempotent — Kafka retries and consumer rebalances will re-deliver messages. Don't add side effects that aren't safe to replay. Couchbase upserts keyed by `historyDocKey(event)` and `stateDocKey(event)` are the only mutations; both are safe.
-
 ### Testing
 
-- Pure logic (normalize, projection) is the unit-tested layer (`test/unit/`). Kafka and Couchbase are exercised manually via the README smoke test.
+- Pure logic (normalize) and config/factory dispatch are the unit-tested layers (`test/unit/`). Kafka I/O is exercised manually via the local smoke test in `docs/development/getting-started.md`.
 - Tests use `bun:test` with `bunfig.toml` `[test]` `root = "./test"` + `preload = ["./test/preload.ts"]` setting `LOG_LEVEL=silent`.
 - Run `bun run typecheck` and `bun test` after every change.
-- If you touch validation or config shape, also run the prod-safety probe: `ENVIRONMENT=prod COUCHBASE_CONNSTR=couchbase://localhost bun run start:gateway` — expected to exit with a Zod refinement error citing `localhost-in-prod`.
+- If you touch validation or config shape, also run the prod-safety probes: `ENVIRONMENT=prod KAFKA_PROVIDER=local bun run start:gateway` (expect Zod error: provider=local not allowed in prod), and equivalents for `msk` without brokers/arn and `confluent` without credentials.
 
 ### Servers / ports
 
@@ -166,9 +166,8 @@ The writer **must** stay idempotent — Kafka retries and consumer rebalances wi
 | 3000 | gateway (Bun.serve) |
 | 9092 | Redpanda (Kafka API) |
 | 8082 | Redpanda (Pandaproxy) |
-| 8091–8096 | Couchbase Server |
-| 11210 | Couchbase memcached |
+| 9644 | Redpanda (admin API) |
 
 ## Out of scope (do not add without discussion)
 
-Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, the Couchbase Kafka Sink Connector, a Dockerfile, OpenTelemetry instrumentation (Phase 3 of the conformance plan — deferred), Couchbase Capella hardening (Phase 4 — TLS connection-string validation, timeout profiles, `AmbiguousTimeoutError` handling, circuit breaker), and Bun workspace catalogs (single-package repo).
+Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, OpenTelemetry instrumentation, Bun workspace catalogs (single-package repo), any database integration in this repo (downstream consumers own their storage), runtime provider switching (KAFKA_PROVIDER is read once at startup), connection pooling at the provider layer.

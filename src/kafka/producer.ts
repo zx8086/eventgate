@@ -2,6 +2,7 @@
 import { Producer, stringSerializers } from "@platformatic/kafka";
 import { config } from "../config/index.ts";
 import type { NormalizedEvent } from "../types.ts";
+import type { KafkaProvider } from "./providers/index.ts";
 
 export type EventProducer = {
   publishRaw(resourceId: string, raw: unknown): Promise<void>;
@@ -11,10 +12,20 @@ export type EventProducer = {
   disconnect(): Promise<void>;
 };
 
-export async function createProducer(clientId: string): Promise<EventProducer> {
+export async function createProducer(
+  clientId: string,
+  provider: KafkaProvider,
+): Promise<EventProducer> {
+  const conn = await provider.getConnectionConfig();
   const producer = new Producer<string, string, string, string>({
     clientId,
-    bootstrapBrokers: config.kafka.brokers,
+    bootstrapBrokers: conn.bootstrapBrokers,
+    ...(conn.sasl ? { sasl: conn.sasl } : {}),
+    ...(conn.tls ? { tls: conn.tls } : {}),
+    ...(conn.connectTimeout !== undefined ? { connectTimeout: conn.connectTimeout } : {}),
+    ...(conn.timeout !== undefined ? { timeout: conn.timeout } : {}),
+    ...(conn.retries !== undefined ? { retries: conn.retries } : {}),
+    ...(conn.retryDelay !== undefined ? { retryDelay: conn.retryDelay } : {}),
     serializers: stringSerializers,
   });
 

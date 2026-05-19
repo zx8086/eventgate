@@ -37,7 +37,7 @@ CMD ["/usr/local/bin/bun", "src/gateway/index.ts"]
 ```
 
 - `dumb-init` reaps zombies and forwards signals — required when the only process in the container is a single Bun runtime.
-- The default `CMD` launches the **gateway**. The writer is launched by overriding `command` at the ECS task-definition level (see [aws-ecs.md](aws-ecs.md)). The Dockerfile keeps the default explicit so `docker run` without flags still produces a usable HTTP server.
+- The default `CMD` launches the **gateway**. eventgate is gateway-only — there is no second entry point in the image.
 
 ## Build Arguments
 
@@ -68,9 +68,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 | Process | Healthcheck behaviour |
 |---------|----------------------|
 | gateway | Honoured — `/healthz` returns `200` once the Kafka producer is connected, `503` otherwise |
-| writer | Disabled at the task-definition layer by setting `HEALTHCHECK NONE` (the writer has no HTTP server) |
-
-Disabling the writer's healthcheck inside the task definition is correct — the alternative (every writer task perpetually unhealthy) would prevent ECS from ever marking the service stable.
 
 ## Image Contents
 
@@ -124,7 +121,7 @@ Expected: `65532:65532 ["/usr/bin/dumb-init","--"] ["/usr/local/bin/bun","src/ga
 Smoke-test the gateway directly:
 
 ```bash
-docker run --rm -p 3000:3000 -e KAFKA_BROKERS=invalid:9092 eventgate:local &
+docker run --rm -p 3000:3000 -e KAFKA_PROVIDER=local -e KAFKA_LOCAL_BOOTSTRAP_SERVERS=invalid:9092 eventgate:local &
 curl -i http://localhost:3000/healthz
 ```
 
@@ -132,7 +129,7 @@ A failing producer connection will return `503` from `/healthz` — that is expe
 
 ## See Also
 
-- [aws-ecs.md](aws-ecs.md) — how the image is launched twice with different `command` overrides.
+- [aws-ecs.md](aws-ecs.md) — how the image is launched as a single ECS service.
 - [../security/container-scanning.md](../security/container-scanning.md) — Trivy scan in CD and the daily security audit.
 - [../../guides/bun-docker-security-guide.md](../../guides/bun-docker-security-guide.md) — project-agnostic Bun container hardening reference.
 
