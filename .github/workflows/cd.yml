@@ -57,11 +57,16 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix={{date 'YYYYMMDD'}}-
 
+      # Default build targets the distroless `production` stage (Tier 2).
+      # DHI_IMAGE defaults to gcr.io/distroless/static-debian12:nonroot inside
+      # the Dockerfile; swap to dhi.io/static:<tag> once a DHI subscription is
+      # provisioned (tracked separately) — no Dockerfile change needed.
       - id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          target: production
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
