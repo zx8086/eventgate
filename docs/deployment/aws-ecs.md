@@ -37,10 +37,12 @@ eventgate deploys as a single container image and a single ECS service: the gate
             |
             | produce (SASL/OAUTHBEARER + TLS)
             v
-        +----------------------------+
-        |  MSK Serverless            |
-        |  raw.v1, events.v1, dlq.v1 |
-        +----------------------------+
+        +-----------------------------------+
+        |  MSK Serverless                   |
+        |  raw.v1  (gateway writes here)    |
+        |  events.v1, dlq.v1 (provisioned;  |
+        |  reserved for future consumers)   |
+        +-----------------------------------+
 ```
 
 ## Single Task Definition
@@ -51,7 +53,7 @@ eventgate deploys as a single container image and a single ECS service: the gate
 | Container `command` | (none — image default `bun src/gateway/index.ts`) |
 | Port mapping | `3000/tcp` |
 | Log group | `/eventgate/gateway` |
-| Task role | `$GATEWAY_TASK_ROLE_ARN` — must grant `kafka:GetBootstrapBrokers` if `MSK_CLUSTER_ARN` is used, plus the MSK IAM auth actions (`kafka-cluster:Connect`, `kafka-cluster:DescribeTopic`, `kafka-cluster:WriteData` on the configured topics) |
+| Task role | `$GATEWAY_TASK_ROLE_ARN` — must grant `kafka:GetBootstrapBrokers` if `MSK_CLUSTER_ARN` is used, plus the MSK IAM auth actions: `kafka-cluster:Connect` and `kafka-cluster:DescribeTopic` for the cluster, and `kafka-cluster:WriteData` scoped to the `raw.v1` topic only (the gateway does not write `events.v1` or `dlq.v1`) |
 | ALB attachment | target group `$GATEWAY_TG_ARN`, container port 3000 |
 | Security group | `$SG_GATEWAY` (ingress from ALB; egress to MSK) |
 | CPU / memory | 256 / 512 (baseline; scale on request count or CPU) |
@@ -72,7 +74,7 @@ The image is built and pushed by `.github/workflows/cd.yml` on pushes to `main`/
 | A.7 | `07-alb.sh` | ALB, target group, listener |
 | A.8 | `08-iam-roles.sh` | Task execution role + gateway task role (with MSK IAM permissions) |
 | B | `build-and-push.sh` | Local image build + push (alternative to the CD workflow) |
-| C | `09-create-topics.ts` | Pre-creates `raw.v1`, `events.v1`, `dlq.v1` on MSK |
+| C | `09-create-topics.ts` | Pre-creates `raw.v1` (gateway sink), `events.v1`, `dlq.v1` (reserved for future consumers) on MSK |
 | D.1 | `10-register-task-defs.sh` | Registers `eventgate-gateway` task definition |
 | D.2 | `11-deploy-services.sh` | Creates or updates the gateway ECS service |
 | D.3 | `12-print-url.sh` | Prints the ALB DNS name |
@@ -117,7 +119,7 @@ After `11-deploy-services.sh` completes, `aws ecs wait services-stable` has conf
 1. `aws ecs describe-services --cluster <cluster> --services eventgate-gateway --query 'services[].{name:serviceName,desired:desiredCount,running:runningCount,deployments:deployments[].rolloutState}'` — `runningCount == desiredCount`, `rolloutState == COMPLETED`.
 2. `curl https://<alb-dns>/healthz` — `200 {"ok":true}`.
 3. CloudWatch Logs `/eventgate/gateway` shows `kafka provider selected` with the expected `provider` and `providerType`, followed by `gateway listening`.
-4. Send a test webhook (see [../api/webhooks.md](../api/webhooks.md)) and confirm an `autoops.event.received` line appears in the gateway log group within seconds.
+4. Send a test webhook (see [../api/webhooks.md](../api/webhooks.md)) and confirm a record lands on `raw.v1` within seconds (the gateway does not log per successful request — verify via the Kafka topic or the outbox `pending` counter on `/healthz`).
 
 ## Rollback
 
@@ -145,3 +147,4 @@ aws ecs update-service \
 |------|--------|
 | 2026-05-19 | Initial AWS ECS deployment doc created |
 | 2026-05-19 | Rewritten for single-service deployment; removed writer task def, replaced Couchbase env block with Kafka provider env block (SIO-795) |
+| 2026-05-19 | Narrowed `kafka-cluster:WriteData` to `raw.v1`; updated verification step; clarified `events.v1`/`dlq.v1` are provisioned but unused by this service (SIO-801) |

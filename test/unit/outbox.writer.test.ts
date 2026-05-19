@@ -1,98 +1,66 @@
 // test/unit/outbox.writer.test.ts
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../../src/outbox/db.ts";
-import { createWriter, type EnqueueInput } from "../../src/outbox/writer.ts";
+import { createWriter } from "../../src/outbox/writer.ts";
 
 let db: OutboxDatabase;
 
 beforeEach(() => {
   db = openOutbox(":memory:");
 });
+afterEach(() => closeOutbox(db));
 
-afterEach(() => {
-  closeOutbox(db);
+describe("createWriter.enqueue", () => {
+  it("inserts a single pending row with the given fields", () => {
+    const writer = createWriter(db);
+    writer.enqueue({
+      topic: "raw",
+      messageKey: "deploy-1",
+      payload: JSON.stringify({ a: 1 }),
+      headers: { source: "elastic-autoops" },
+    });
+    const row = db.query("SELECT * FROM outbox").get() as Record<string, unknown>;
+    expect(row.topic).toBe("raw");
+    expect(row.message_key).toBe("deploy-1");
+    expect(row.status).toBe("pending");
+    expect(row.attempts).toBe(0);
+    expect(row.payload).toBe(JSON.stringify({ a: 1 }));
+    expect(row.headers).toBe(JSON.stringify({ source: "elastic-autoops" }));
+  });
+
+  it("stores headers as null when none provided", () => {
+    const writer = createWriter(db);
+    writer.enqueue({
+      topic: "raw",
+      messageKey: "k",
+      payload: "{}",
+      headers: null,
+    });
+    const row = db.query("SELECT headers FROM outbox").get() as { headers: string | null };
+    expect(row.headers).toBeNull();
+  });
+
+  it("rejects unsupported topic values at the writer boundary", () => {
+    const writer = createWriter(db);
+    // @ts-expect-error — runtime guard, type forbids this
+    expect(() => writer.enqueue({ topic: "events", messageKey: "k", payload: "{}", headers: null })).toThrow();
+  });
 });
 
-function makePair(): [EnqueueInput, EnqueueInput] {
-  return [
-    {
-      topic: "raw",
-      messageKey: "res-1",
-      payload: JSON.stringify({ raw: true }),
-      headers: null,
-    },
-    {
-      topic: "events",
-      messageKey: "res-1",
-      payload: JSON.stringify({ event: true }),
-      headers: { eventType: "alert" },
-    },
-  ];
-}
-
-describe("createWriter.enqueuePair", () => {
-  test("writes both rows atomically", () => {
+describe("createWriter.backlogStats", () => {
+  it("counts pending and failed rows", () => {
     const writer = createWriter(db);
-    const [raw, normalized] = makePair();
-    writer.enqueuePair(raw, normalized);
-
-    const rows = db.query("SELECT * FROM outbox ORDER BY topic").all() as Array<{
-      topic: string;
-      status: string;
-      attempts: number;
-      next_attempt_at: number;
-      created_at: number;
-    }>;
-    expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.topic).sort()).toEqual(["events", "raw"]);
-    for (const row of rows) {
-      expect(row.status).toBe("pending");
-      expect(row.attempts).toBe(0);
-      expect(row.next_attempt_at).toBe(row.created_at);
-    }
+    writer.enqueue({ topic: "raw", messageKey: "a", payload: "{}", headers: null });
+    writer.enqueue({ topic: "raw", messageKey: "b", payload: "{}", headers: null });
+    db.run("UPDATE outbox SET status='failed' WHERE message_key='b'");
+    const stats = writer.backlogStats();
+    expect(stats.pending).toBe(1);
+    expect(stats.failed).toBe(1);
+    expect(stats.oldestPendingAgeMs).toBeGreaterThanOrEqual(0);
   });
 
-  test("rolls back when the second insert throws", () => {
+  it("returns oldestPendingAgeMs=0 when nothing pending", () => {
     const writer = createWriter(db);
-    const [raw] = makePair();
-    expect(() =>
-      writer.enqueuePair(raw, {
-        // bad row: topic missing/empty triggers an insertion error
-        topic: "" as unknown as EnqueueInput["topic"],
-        messageKey: "res-1",
-        payload: "{}",
-        headers: null,
-      }),
-    ).toThrow();
-
-    const count = (db.query("SELECT COUNT(*) AS c FROM outbox").get() as { c: number }).c;
-    expect(count).toBe(0);
-  });
-
-  test("serializes headers as JSON when provided", () => {
-    const writer = createWriter(db);
-    const [, normalized] = makePair();
-    writer.enqueuePair(makePair()[0], normalized);
-
-    const row = db
-      .query("SELECT headers FROM outbox WHERE topic = $t")
-      .get({ t: "events" }) as { headers: string };
-    expect(JSON.parse(row.headers)).toEqual({ eventType: "alert" });
-  });
-
-  test("backlogStats counts pending, failed, and oldest age", async () => {
-    const writer = createWriter(db);
-    const [raw, normalized] = makePair();
-    writer.enqueuePair(raw, normalized);
-
-    const before = writer.backlogStats();
-    expect(before.pending).toBe(2);
-    expect(before.failed).toBe(0);
-    expect(before.oldestPendingAgeMs).toBeGreaterThanOrEqual(0);
-
-    db.run("UPDATE outbox SET status='failed' WHERE topic='raw'");
-    const after = writer.backlogStats();
-    expect(after.pending).toBe(1);
-    expect(after.failed).toBe(1);
+    expect(writer.backlogStats()).toEqual({ pending: 0, failed: 0, oldestPendingAgeMs: 0 });
   });
 });

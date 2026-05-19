@@ -17,7 +17,7 @@ export type BacklogStats = {
 };
 
 export type OutboxWriter = {
-  enqueuePair(raw: EnqueueInput, normalized: EnqueueInput): void;
+  enqueue(row: EnqueueInput): void;
   backlogStats(): BacklogStats;
 };
 
@@ -29,19 +29,17 @@ export function createWriter(db: OutboxDatabase): OutboxWriter {
        ($id, $topic, $message_key, $payload, $headers, 'pending', 0, $now, $now)`,
   );
 
-  const enqueueTx = db.transaction((rows: EnqueueInput[]) => {
+  const enqueueTx = db.transaction((row: EnqueueInput) => {
     const now = Date.now();
-    for (const row of rows) {
-      const topic = outboxTopicSchema.parse(row.topic);
-      insertRow.run({
-        id: randomUUID(),
-        topic,
-        message_key: row.messageKey,
-        payload: row.payload,
-        headers: row.headers === null ? null : JSON.stringify(row.headers),
-        now,
-      });
-    }
+    const topic = outboxTopicSchema.parse(row.topic);
+    insertRow.run({
+      id: randomUUID(),
+      topic,
+      message_key: row.messageKey,
+      payload: row.payload,
+      headers: row.headers === null ? null : JSON.stringify(row.headers),
+      now,
+    });
   });
 
   const pendingCountStmt = db.query(
@@ -55,8 +53,8 @@ export function createWriter(db: OutboxDatabase): OutboxWriter {
   );
 
   return {
-    enqueuePair(raw, normalized) {
-      enqueueTx([raw, normalized]);
+    enqueue(row) {
+      enqueueTx(row);
     },
     backlogStats(): BacklogStats {
       const pending = (pendingCountStmt.get() as { c: number }).c;

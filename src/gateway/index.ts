@@ -31,7 +31,7 @@ if (config.outbox.enabled) {
     db: outboxDb,
     producer,
     config: {
-      topics: config.kafka.topics,
+      topics: { raw: config.kafka.topics.raw },
       batchSize: config.outbox.batchSize,
       backoffMaxMs: config.outbox.backoffMaxMs,
       maxAgeMs: config.outbox.maxAgeHours * 60 * 60 * 1_000,

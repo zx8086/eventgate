@@ -16,7 +16,7 @@ export type DrainerProducer = {
 };
 
 export type DrainerConfig = {
-  topics: { raw: string; events: string; dlq: string };
+  topics: { raw: string };
   batchSize: number;
   backoffMaxMs: number;
   maxAgeMs: number;
@@ -45,14 +45,10 @@ type PendingRow = {
   created_at: number;
 };
 
-function topicToKafka(topic: string, topics: DrainerConfig["topics"]): string {
-  switch (topic as OutboxTopic) {
+function topicToKafka(topic: OutboxTopic, topics: DrainerConfig["topics"]): string {
+  switch (topic) {
     case "raw":
       return topics.raw;
-    case "events":
-      return topics.events;
-    case "dlq":
-      return topics.dlq;
   }
 }
 
@@ -102,7 +98,7 @@ export async function runOutboxIteration(opts: {
   let failedPermanently = 0;
 
   for (const row of pending) {
-    const kafkaTopic = topicToKafka(row.topic, config.topics);
+    const kafkaTopic = topicToKafka(row.topic as OutboxTopic, config.topics);
     const headers = parseHeaders(row.headers);
     try {
       await producer.sendByTopic(kafkaTopic, row.message_key, row.payload, headers);

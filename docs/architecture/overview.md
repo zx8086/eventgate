@@ -4,43 +4,36 @@
 > **Last updated:** 2026-05-19
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
-eventgate is a single-process Bun service that ingests Elastic AutoOps webhook notifications and durably publishes them to Kafka. The gateway validates, normalizes, and produces; everything downstream — alerting, projection, fan-out — is implemented as separate consumers on the events topic, in other services.
+eventgate is a single-process Bun service that ingests Elastic AutoOps webhook notifications and durably persists them to Kafka. The gateway accepts any valid JSON POST and writes it verbatim to `raw.v1` via a local SQLite outbox. Validation, normalization, alerting, and projection are concerns for downstream consumers in other services.
 
 ## Data Flow
 
 ```
-+------------------+      POST        +------------------+    produce     +------------------+
-|                  | ---------------> |                  | -------------> |                  |
-|  Elastic AutoOps |                  |  gateway         |                |  Kafka           |
-|  (webhook)       |                  |  Bun.serve       |                |  raw.v1          |
-|                  | <--- 202 ack --- |  port 3000       |                |  events.v1       |
-+------------------+                  +--------+---------+                |  dlq.v1          |
-                                               |                          +--------+---------+
-                                               |                                   |
-                                               v                                   v
-                                       +------------------+                +------------------+
-                                       | KafkaProvider    |                |  downstream      |
-                                       | factory          |                |  consumers       |
-                                       | local / msk /    |                |  (other services)|
-                                       | confluent        |                |                  |
-                                       +------------------+                +------------------+
++------------------+      POST        +------------------+   enqueue     +------------------+    publish    +-------------+
+|  Elastic AutoOps | ---------------> |  gateway         | -----------> |  outbox (SQLite) | ----------> | Kafka raw.v1|
+|  (webhook)       | <---  202 ack -- |  Bun.serve :3000 |              |  ./data/outbox.db|             +-------------+
++------------------+                  +------------------+              +------------------+
 ```
+
+### Reserved topics
+
+`ops.elastic.autoops.events.v1` and `ops.elastic.autoops.dlq.v1` stay provisioned but are not written by the gateway. They are reserved for future consumer services that may decide to publish normalized events or quarantine bad messages. The gateway has no opinion about validity — that is a consumer concern.
 
 ## Process
 
 | Process | Entry point | Responsibility |
 |---------|------------|----------------|
-| gateway | `src/gateway/index.ts` | Validate, normalize, publish raw + normalized events, return `202`. Reports producer health on `/healthz`. |
+| gateway | `src/gateway/index.ts` | Accept any valid JSON POST, enqueue verbatim into the SQLite outbox, return `202`. Reports producer health on `/healthz`. |
 
-There is no writer or projector in this repo. Add new downstream behaviour (Slack, PagerDuty, rolling aggregates, sinks into a database) as a **separate consumer group** on `events.v1` — never bolt it into the gateway.
+There is no writer or projector in this repo. Add new downstream behaviour (Slack, PagerDuty, rolling aggregates, sinks into a database) as a **separate consumer service** on `raw.v1` (or a future `events.v1` published by a downstream normalizer) — never bolt it into the gateway.
 
 ## Kafka Topics
 
 | Topic | Producer | Purpose |
 |-------|----------|---------|
-| `ops.elastic.autoops.raw.v1` | gateway | Verbatim webhook body, keyed by `resourceId`, retained for replay |
-| `ops.elastic.autoops.events.v1` | gateway | Normalized event, keyed by `resourceId`; headers carry `source`, `eventType`, `severity`, `schemaVersion`, `idempotencyKey` for filter-without-parse |
-| `ops.elastic.autoops.dlq.v1` | gateway (reserved) | DLQ slot. The gateway currently rejects malformed bodies with `400` instead of publishing to the DLQ; the topic exists so future consumers can quarantine messages they cannot process. |
+| `ops.elastic.autoops.raw.v1` | gateway | Verbatim webhook body, retained for replay. The gateway opportunistically sets an `idempotencyKey` Kafka header when the body looks AutoOps-shaped. |
+| `ops.elastic.autoops.events.v1` | — | Reserved for future consumers that may publish normalized events. Not written by the gateway. |
+| `ops.elastic.autoops.dlq.v1` | — | Reserved for future consumers that may quarantine bad messages. Not written by the gateway. |
 
 ## Kafka Provider Factory
 
@@ -54,30 +47,14 @@ The gateway connects to Kafka through a provider abstraction selected by `KAFKA_
 
 See [kafka-provider-factory.md](kafka-provider-factory.md) for env vars, field requirements, and the portable pattern.
 
-## Normalization Contract
-
-The lenient inbound schema lives in `src/gateway/schema.ts`; the pure normalization function is `normalizeElasticAutoOps()` in `src/normalize.ts`.
-
-| Field | Rule | Reason |
-|-------|------|--------|
-| `severity` | Lowercase, map `high|medium|low`; anything else → `"unknown"` | AutoOps docs spell these `High|Medium|Low`, operators sometimes lowercase |
-| `status` | Lowercase, map both `open`/`opened` → `"opened"`, `close`/`closed`/`resolved` → `"closed"` | AutoOps docs say `open|close`; templates and the resolved-event flow use other spellings |
-| `alertSignature` | `slugify(resourceId :: title)` | Stable across the open + close pair of the same alert — useful for downstream rollup |
-| `idempotencyKey` | `sha256(resourceId :: title :: status :: startTime :: endTime)` | Stable across retries of the same delivery; differs between the open and close of the same alert because `status` differs |
-| `affectedNodes` / `affectedIndices` | CSV string or `string[]` accepted; coerced to `string[]` | AutoOps templates emit either format |
-
-### Hyphenated keys and synthetic test bodies
-
-`src/gateway/schema.ts` maps AutoOps' hyphenated default keys (`deployment-id`, `start-time`, ...) to camelCase before validation, and detects AutoOps' "Validate" button test body (every value is an un-substituted `${VAR}` placeholder) so the gateway can acknowledge it with `202` instead of failing schema validation.
-
 ## Failure Handling
 
 | Failure | Where | Action |
 |---------|-------|--------|
-| Invalid JSON body | gateway (`src/gateway/routes.ts`) | Return `400`, do not publish |
-| Schema validation failure | gateway | Return `400` with Zod issues, do not publish |
-| Kafka publish failure | gateway | Log a warning with `{ err, resourceId }`, still return `202` (receive-fast, process-async) |
-| Producer disconnected | gateway `/healthz` | Return `503` |
+| Invalid JSON body | gateway (`src/gateway/routes.ts`) | Return `400`, do not enqueue |
+| Outbox enqueue fails (SQLite) | gateway | Return `500`; the row is not durable, so the caller learns the truth |
+| Kafka publish failure (drainer) | outbox drainer | Bump attempts, exponential backoff, eventually `status='failed'` after `OUTBOX_MAX_AGE_HOURS` |
+| Producer disconnected | gateway `/healthz` | Report `producer.connected: false`, return `503` |
 
 ## Configuration
 
@@ -112,3 +89,4 @@ These are documented separately in `CLAUDE.md` and the v1 plan; flagged here so 
 |------|--------|
 | 2026-05-19 | Initial architecture overview created |
 | 2026-05-19 | Rewritten for gateway-only architecture: removed writer + Couchbase doc model, added Kafka provider factory layer (SIO-795) |
+| 2026-05-19 | Accept-everything contract: gateway no longer validates or normalizes; only `raw.v1` is written; `events.v1` and `dlq.v1` reserved for future consumers (SIO-801) |

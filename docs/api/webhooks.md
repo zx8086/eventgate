@@ -4,7 +4,7 @@
 > **Last updated:** 2026-05-19
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
-The gateway exposes two HTTP endpoints — the Elastic AutoOps webhook receiver and a healthcheck. This document is the contract: request and response shapes, status codes, idempotency semantics, and the synthetic-test path used by AutoOps' "Validate" button. The implementation lives in `src/gateway/routes.ts`, `src/gateway/schema.ts`, and `src/normalize.ts`.
+The gateway exposes two HTTP endpoints — the Elastic AutoOps webhook receiver and a healthcheck. This document is the contract: request and response shapes, status codes, and the opportunistic idempotency-key header the gateway stamps when it recognizes an AutoOps body. The implementation lives in `src/gateway/routes.ts` and `src/gateway/idempotencyKey.ts`.
 
 ## Endpoints
 
@@ -25,61 +25,26 @@ Any other path returns `404` with the body `Not found` and is logged at `warn` w
 
 ### Request body
 
-The schema is lenient on shape and strict on the two identifiers required to compute the alert signature and idempotency key. It accepts both AutoOps' hyphenated default keys (`deployment-id`, `start-time`, ...) and the camelCase form documented in the project README. Unsubstituted `${VAR}` placeholders are stripped before validation (see Synthetic Validation Body).
+The gateway is **accept-everything**: any valid JSON body is accepted. There is no schema validation and no normalization. The body is forwarded verbatim to the `ops.elastic.autoops.raw.v1` Kafka topic. Downstream consumer services (not part of this repo) are responsible for parsing, validating, and normalizing the payload.
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `resourceId` | string | yes | Elastic deployment / resource id (`RESOURCE_ID`) |
-| `title` | string | yes | Alert title (`TITLE`); part of `alertSignature` |
-| `resourceName` | string | defaults to `""` | Human-readable resource name (`RESOURCE_NAME`) |
-| `status` | string | defaults to `"unknown"` | `open` / `close`; `opened` / `closed` / `resolved` also tolerated |
-| `severity` | string | optional | `High` / `Medium` / `Low`; case-insensitive |
-| `description` | string | optional | (`DESCRIPTION`) |
-| `message` | string | optional | (`MESSAGE`) |
-| `startTime` | string | optional | ISO-8601 (`START_TIME`) |
-| `endTime` | string \| null | optional | ISO-8601 (`END_TIME`) |
-| `endpointType` | string | optional | (`ENDPOINT_TYPE`) |
-| `affectedNodes` | string \| string[] | optional | Comma-separated or array (`AFFECTED_NODES`) |
-| `affectedIndices` | string \| string[] | optional | Comma-separated or array (`AFFECTED_INDICES`) |
-| `eventLink` | string | optional | Deep-link to AutoOps (`EVENT_LINK`) |
-| `source` | string | optional | Upstream source tag |
+The only fields the gateway inspects are used to derive a message key and an optional `idempotencyKey` header:
 
-The schema is `.loose()` — unknown keys are kept but ignored.
+| Field | Used for | Notes |
+|-------|----------|-------|
+| `resourceId` or `deployment-id` | Kafka message key | First non-empty string wins; falls back to the literal `unkeyed` |
+| `title`, `status`, `startTime` / `start-time`, `endTime` / `end-time` | Opportunistic `idempotencyKey` header | All four must be present strings for the header to be stamped |
 
-### Recommended AutoOps connector body
-
-In the AutoOps connector body template, map the AutoOps variables to camelCase:
-
-```json
-{
-  "resourceId": "RESOURCE_ID",
-  "resourceName": "RESOURCE_NAME",
-  "title": "TITLE",
-  "description": "DESCRIPTION",
-  "severity": "SEVERITY",
-  "status": "STATUS",
-  "message": "MESSAGE",
-  "startTime": "START_TIME",
-  "endTime": "END_TIME",
-  "endpointType": "ENDPOINT_TYPE",
-  "affectedNodes": "AFFECTED_NODES",
-  "affectedIndices": "AFFECTED_INDICES",
-  "eventLink": "EVENT_LINK"
-}
-```
-
-The hyphenated-key form (`deployment-id`, `start-time`, etc.) is also accepted and is normalized to camelCase before validation in `src/gateway/schema.ts`.
+The body itself is not inspected beyond those keys.
 
 ### Responses
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `202 Accepted` | Valid payload, normalized, publish attempted | `{ "accepted": true, "resourceId": "...", "idempotencyKey": "..." }` |
-| `202 Accepted` | Synthetic validation body (every field is a `${VAR}` placeholder) | `{ "accepted": true, "validation": "synthetic" }` |
+| `202 Accepted` | JSON parsed, outbox enqueue (or inline publish) attempted | `{ "accepted": true }` |
 | `400 Bad Request` | JSON parse failure | `{ "accepted": false, "error": "invalid JSON body" }` |
-| `400 Bad Request` | Schema validation failure | `{ "accepted": false, "error": "schema validation failed", "issues": [ ... Zod issues ... ] }` |
+| `500 Internal Server Error` | Outbox enqueue failed (durability layer broken) | `{ "accepted": false, "error": "outbox enqueue failed" }` |
 
-The gateway returns `202` even if the Kafka publish fails — the failure is logged at `warn` with `{ err, resourceId }` but does not block the response. This is the **receive-fast, process-async** pattern: AutoOps gets a fast ACK and the message can be replayed later from upstream if necessary.
+When the outbox is disabled (`OUTBOX_ENABLED=false`), inline Kafka publish failures are logged at `warn` but the gateway still returns `202`. This is the **receive-fast, process-async** pattern: AutoOps gets a fast ACK and the message can be replayed later from upstream if necessary. When the outbox is enabled (the default), durability is owned by SQLite and the drainer — see [../architecture/outbox.md](../architecture/outbox.md).
 
 ### Example success
 
@@ -100,22 +65,22 @@ curl -i -X POST http://localhost:3000/webhooks/elastic/autoops \
 HTTP/1.1 202 Accepted
 Content-Type: application/json
 
-{"accepted":true,"resourceId":"r-123","idempotencyKey":"3a9e..."}
+{"accepted":true}
 ```
 
-### Example schema failure
+### Example invalid JSON
 
 ```bash
 curl -i -X POST http://localhost:3000/webhooks/elastic/autoops \
   -H 'Content-Type: application/json' \
-  -d '{"title": "no resourceId here"}'
+  -d 'not-json'
 ```
 
 ```http
 HTTP/1.1 400 Bad Request
 Content-Type: application/json
 
-{"accepted":false,"error":"schema validation failed","issues":[{"path":["resourceId"],"message":"Required",...}]}
+{"accepted":false,"error":"invalid JSON body"}
 ```
 
 ## GET /healthz
@@ -128,25 +93,20 @@ No body, no headers required.
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `200 OK` | Kafka producer is connected | `{ "ok": true }` |
-| `503 Service Unavailable` | Kafka producer is not connected | `{ "ok": false }` |
+| `200 OK` | Kafka producer is connected | `{ "ok": true, "producer": { "connected": true }, "outbox": { ... } }` |
+| `503 Service Unavailable` | Kafka producer is not connected | `{ "ok": false, "producer": { "connected": false }, "outbox": { ... } }` |
 
-The ALB target-group healthcheck and the Dockerfile `HEALTHCHECK` both target this path. The healthcheck only probes the gateway's own producer state; it does not probe any downstream system.
+The `outbox` block reports `{ enabled: true, pending, failed, oldestPendingAgeMs }` when the outbox is on, or `{ enabled: false }` otherwise. The ALB target-group healthcheck and the Dockerfile `HEALTHCHECK` both target this path. The healthcheck only probes the gateway's own producer state; it does not probe any downstream system.
 
-## Idempotency Contract
+## Idempotency Header
 
-The gateway computes two identifiers from each accepted payload and emits them on the normalized event:
+When the gateway can extract `resourceId`/`deployment-id`, `title`, and `status` from the body, it stamps a deterministic `idempotencyKey` Kafka header on the outgoing `raw.v1` message:
 
-| Identifier | Formula | Use |
-|-----------|---------|---------|
-| `alertSignature` | `slugify(resourceId :: title)` | Stable across the open + close pair of the same alert. Available to downstream consumers via the message body and the `routingKey`. |
-| `idempotencyKey` | `sha256(resourceId :: title :: status :: startTime :: endTime)` | Returned in the `202` response body and emitted as a Kafka header. Stable across retries of the same delivery; differs between the open and close of the same alert because `status` differs. |
+```
+idempotencyKey = sha256(resourceId :: title :: status :: startTime :: endTime)
+```
 
-Downstream consumers are responsible for deduping on `idempotencyKey` if their write path is not naturally idempotent.
-
-## Synthetic Validation Body
-
-The AutoOps "Validate" button in the connector UI posts the body template **without substituting placeholders** — every value comes through as the literal string `${RESOURCE_ID}`, `${TITLE}`, etc. `isSyntheticAutoOpsTest()` in `src/gateway/schema.ts` detects this case (every value is a string matching `${...}`) and the route returns `202 { "validation": "synthetic" }` instead of failing schema validation. Real malformed deliveries still get `400` because they will have at least one non-placeholder field.
+The key is not returned in the HTTP response — operators read it off the Kafka header. Downstream consumers may dedupe on `idempotencyKey` if their write path is not naturally idempotent. The header is **opportunistic**: bodies that don't expose the four required fields ship with no header, and the gateway still returns `202`.
 
 ## Authentication
 
@@ -154,12 +114,13 @@ There is no authentication on the webhook endpoint in v1. AutoOps webhook connec
 
 ## Logging
 
-Each accepted webhook delivery logs one `autoops.event.received` line at `info` with the normalized event as a binding. Schema failures log at `warn` with the Zod issues and the original body. Kafka publish failures log at `warn` with `{ err, resourceId }`. The `component` binding is `gateway.routes` — see [../operations/logging.md](../operations/logging.md) for filter patterns.
+The gateway logs at `warn` if the outbox enqueue fails (`outbox enqueue failed`) and at `warn` if an inline (outbox-disabled) Kafka publish fails (`kafka publish failed; will not retry without outbox`). Successful deliveries do not log per-request — the outbox row and the resulting Kafka message are the audit trail. The `component` binding is `gateway.routes` — see [../operations/logging.md](../operations/logging.md) for filter patterns.
 
 ## See Also
 
-- [../architecture/overview.md](../architecture/overview.md) — the normalization contract that defines `alertSignature` and `idempotencyKey`.
+- [../architecture/overview.md](../architecture/overview.md) — accept-everything flow and the role of the outbox.
 - [../architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md) — which Kafka backend the producer is connected to.
+- [../architecture/outbox.md](../architecture/outbox.md) — durability layer between the HTTP handler and Kafka.
 - [../development/getting-started.md](../development/getting-started.md) — local curl + smoke test.
 - [../operations/logging.md](../operations/logging.md) — how to find webhook deliveries in CloudWatch.
 
@@ -169,3 +130,4 @@ Each accepted webhook delivery logs one `autoops.event.received` line at `info` 
 |------|--------|
 | 2026-05-19 | Initial webhooks API doc created |
 | 2026-05-19 | Removed writer/Couchbase references from the idempotency section (SIO-795) |
+| 2026-05-19 | Rewritten for accept-everything contract: no schema validation, single 202 body, `idempotencyKey` moved to Kafka header (SIO-801) |

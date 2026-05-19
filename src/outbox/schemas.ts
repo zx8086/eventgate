@@ -2,7 +2,7 @@
 import { z } from "zod";
 
 export const outboxTopicSchema = z
-  .enum(["raw", "events", "dlq"])
+  .enum(["raw"])
   .describe("Which configured Kafka topic family this row should publish to.");
 
 export type OutboxTopic = z.infer<typeof outboxTopicSchema>;
@@ -16,7 +16,7 @@ export type OutboxStatus = z.infer<typeof outboxStatusSchema>;
 export const outboxRowSchema = z.strictObject({
   id: z.string().min(1).describe("Row id (uuid v4)."),
   topic: outboxTopicSchema,
-  message_key: z.string().describe("Kafka partition key. May be empty for dlq."),
+  message_key: z.string().describe("Kafka partition key."),
   payload: z.string().describe("Already JSON-stringified Kafka message value."),
   headers: z
     .string()
