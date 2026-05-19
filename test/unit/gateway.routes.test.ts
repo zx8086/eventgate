@@ -4,13 +4,15 @@ import { buildRoutes } from "../../src/gateway/routes.ts";
 import type { EventProducer } from "../../src/kafka/producer.ts";
 import type { OutboxWriter, EnqueueInput, BacklogStats } from "../../src/outbox/writer.ts";
 
+// Cast omits publishNormalized + publishDlq which are due to be deleted in a
+// later SIO-801 task — the route handler under test never calls them.
 function fakeProducer(): EventProducer {
   return {
     publishRaw: async () => {},
     sendByTopic: async () => {},
     isConnected: () => true,
     disconnect: async () => {},
-  };
+  } as unknown as EventProducer;
 }
 
 function fakeOutbox(): { writer: OutboxWriter; rows: EnqueueInput[] } {
