@@ -42,7 +42,7 @@ docker compose up -d
 
 - Redpanda single-node (Kafka API on 9092). The companion `redpanda-init` container auto-creates `ops.elastic.autoops.raw.v1`, `ops.elastic.autoops.events.v1`, and `ops.elastic.autoops.dlq.v1`.
 
-No database service is started — eventgate publishes only to Kafka. Downstream consumers (if any) run in other services.
+No database service is started — eventgate publishes only to Kafka. The gateway writes solely to `raw.v1`; the other two topics are reserved for future downstream consumer services.
 
 ## Run the gateway
 
@@ -77,18 +77,16 @@ curl -X POST http://localhost:3000/webhooks/elastic/autoops \
 Expected response:
 
 ```json
-{
-  "accepted": true,
-  "resourceId": "r-123",
-  "idempotencyKey": "<sha256-hex>"
-}
+{ "accepted": true }
 ```
 
 Confirm the message landed in Kafka:
 
 ```bash
-docker exec eventgate-redpanda rpk topic consume ops.elastic.autoops.events.v1 -n 1
+docker exec eventgate-redpanda rpk topic consume ops.elastic.autoops.raw.v1 -n 1
 ```
+
+The gateway stamps an opportunistic `idempotencyKey` header on the Kafka record when it can derive one from the body — see [../api/webhooks.md](../api/webhooks.md#idempotency-header). The HTTP response itself is always just `{ accepted: true }`.
 
 ## Run the unit tests
 
@@ -145,3 +143,4 @@ docker compose down
 |------|--------|
 | 2026-05-19 | Initial getting-started doc created |
 | 2026-05-19 | Removed Couchbase bootstrap and writer process; gateway-only loop (SIO-795) |
+| 2026-05-19 | Smoke test now consumes `raw.v1`; expected response shrunk to `{ accepted: true }` under accept-everything contract (SIO-801) |

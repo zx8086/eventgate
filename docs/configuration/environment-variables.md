@@ -36,9 +36,9 @@ Comma-separated lists are trimmed and empty entries are dropped.
 |----------|---------|-------------|
 | `KAFKA_PROVIDER` | `local` | One of `local`, `msk`, `confluent`. See [../architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md). |
 | `KAFKA_CLIENT_ID` | `eventgate-gateway` | Client id for the producer. |
-| `KAFKA_TOPIC_RAW` | `ops.elastic.autoops.raw.v1` | Topic for verbatim webhook bodies. |
-| `KAFKA_TOPIC_EVENTS` | `ops.elastic.autoops.events.v1` | Topic for normalized events. |
-| `KAFKA_TOPIC_DLQ` | `ops.elastic.autoops.dlq.v1` | DLQ topic (reserved for downstream consumers). |
+| `KAFKA_TOPIC_RAW` | `ops.elastic.autoops.raw.v1` | Topic for verbatim webhook bodies — the **only** topic the gateway writes to. |
+| `KAFKA_TOPIC_EVENTS` | `ops.elastic.autoops.events.v1` | Reserved for a future normalizer/consumer service. Provisioned by `redpanda-init` / `09-create-topics.ts` but not written by this service. |
+| `KAFKA_TOPIC_DLQ` | `ops.elastic.autoops.dlq.v1` | Reserved for downstream consumers. Provisioned but not written by this service. |
 
 ## Local provider
 
@@ -136,3 +136,4 @@ LOG_LEVEL=debug
 | 2026-05-19 | Initial environment variable reference created |
 | 2026-05-19 | Replaced Couchbase + KAFKA_BROKERS/AUTH/REGION with Kafka provider factory env vars (SIO-795) |
 | 2026-05-19 | Added `OUTBOX_*` env vars for the SQLite outbox layer (SIO-799) |
+| 2026-05-19 | Clarified that `KAFKA_TOPIC_EVENTS` / `KAFKA_TOPIC_DLQ` are reserved for future consumer services and not written by the gateway (SIO-801) |

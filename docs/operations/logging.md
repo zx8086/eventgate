@@ -91,15 +91,20 @@ The log group is created by `scripts/deploy/06-log-groups.sh`.
 CloudWatch Logs Insights queries:
 
 ```text
-# all webhook receipts in the last hour
-fields @timestamp, component, resourceId, idempotencyKey
+# unmatched requests (404s) in the last hour
+fields @timestamp, method, path, ua
 | filter component = "gateway.routes"
-| filter message = "autoops.event.received"
+| filter message = "unmatched request"
 | sort @timestamp desc
 
-# kafka publish failures
-fields @timestamp, err.message, resourceId
-| filter message = "kafka publish failed"
+# outbox enqueue failures (gateway durability broken)
+fields @timestamp, err.message, messageKey
+| filter message = "outbox enqueue failed"
+| sort @timestamp desc
+
+# inline kafka publish failures (only when OUTBOX_ENABLED=false)
+fields @timestamp, err.message, messageKey
+| filter message like /kafka publish failed/
 | sort @timestamp desc
 
 # provider selection at startup
@@ -113,10 +118,10 @@ fields @timestamp, provider, providerType
 | Log it | Do not log it |
 |--------|---------------|
 | `{ err }` on every caught exception | The full webhook body at `info` (PII risk; AutoOps payloads may include node names and indices that customers consider sensitive) |
-| `resourceId`, `alertSignature`, `idempotencyKey`, `eventType`, `severity` | MSK / Confluent credentials, even on auth failures |
-| Kafka publish failures with `{ err, resourceId }` | Verbatim raw Kafka payloads at `info` — they are already on the `raw.v1` topic for replay |
+| `messageKey` on enqueue / publish failures | MSK / Confluent credentials, even on auth failures |
+| Outbox enqueue failures with `{ err, messageKey }` | Verbatim raw Kafka payloads at `info` — they are already on the `raw.v1` topic for replay |
 
-The gateway currently logs the parsed body at `warn` when schema validation fails (`src/gateway/routes.ts`). That is acceptable because validation failures are rare and the operator needs the payload to fix the connector template — but reconsider this if the volume grows.
+The gateway is **accept-everything** and does not log per successful request — the outbox row and the resulting `raw.v1` Kafka message are the audit trail. Only failure paths (outbox enqueue errors and inline publish errors when the outbox is disabled) emit a log line per request.
 
 ## Shutdown Logging
 
@@ -134,3 +139,4 @@ The gateway registers SIGINT and SIGTERM handlers that log the signal, then call
 |------|--------|
 | 2026-05-19 | Initial logging doc created |
 | 2026-05-19 | Single-process model; removed writer log group (SIO-795) |
+| 2026-05-19 | Removed `autoops.event.received` filter; gateway no longer logs per successful request under the accept-everything contract (SIO-801) |
