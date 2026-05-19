@@ -1,8 +1,9 @@
 // scripts/deploy/09-create-topics.ts
-// Pre-creates the three eventgate topics on MSK Serverless via kafkajs admin.
-// Run: bun scripts/deploy/09-create-topics.ts
-import { generateAuthToken } from "aws-msk-iam-sasl-signer-js";
-import { Kafka, logLevel } from "kafkajs";
+// Pre-creates the three eventgate topics on the Redpanda broker.
+// Redpanda's user-data already creates these on first boot; this script is a
+// safety net for re-runs or environments where auto-create is disabled.
+// Run from inside the VPC (e.g. as a one-shot Fargate task): bun scripts/deploy/09-create-topics.ts
+import { Admin } from "@platformatic/kafka";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -17,41 +18,25 @@ const env = Object.fromEntries(
     }),
 ) as Record<string, string>;
 
-const bootstrap = env.MSK_BOOTSTRAP;
-const region = process.env.AWS_REGION ?? "eu-central-1";
-if (!bootstrap) throw new Error("MSK_BOOTSTRAP missing in .env.aws — run 03-msk.sh first");
+const bootstrap = env.KAFKA_BROKERS;
+if (!bootstrap) throw new Error("KAFKA_BROKERS missing in .env.aws");
 
-const kafka = new Kafka({
+const admin = new Admin({
   clientId: "eventgate-topic-bootstrap",
-  brokers: bootstrap.split(","),
-  ssl: true,
-  sasl: {
-    mechanism: "oauthbearer",
-    oauthBearerProvider: async () => {
-      const { token } = await generateAuthToken({ region });
-      return { value: token };
-    },
-  },
-  logLevel: logLevel.INFO,
+  bootstrapBrokers: bootstrap.split(","),
 });
 
-const admin = kafka.admin();
-await admin.connect();
-
 const desired = [
-  { topic: "ops.elastic.autoops.raw.v1", numPartitions: 3, replicationFactor: 3 },
-  { topic: "ops.elastic.autoops.events.v1", numPartitions: 3, replicationFactor: 3 },
-  { topic: "ops.elastic.autoops.dlq.v1", numPartitions: 3, replicationFactor: 3 },
+  "ops.elastic.autoops.raw.v1",
+  "ops.elastic.autoops.events.v1",
+  "ops.elastic.autoops.dlq.v1",
 ];
 
-const existing = new Set(await admin.listTopics());
-const toCreate = desired.filter((t) => !existing.has(t.topic));
-
-if (toCreate.length === 0) {
-  console.log("all topics already exist");
-} else {
-  await admin.createTopics({ topics: toCreate });
-  console.log(`created topics: ${toCreate.map((t) => t.topic).join(", ")}`);
+try {
+  await admin.createTopics({ topics: desired, partitions: 3, replicas: 1 });
+  console.log(`created topics: ${desired.join(", ")}`);
+} catch (err) {
+  console.log("createTopics returned (may be no-op if topics exist):", err);
 }
 
-await admin.disconnect();
+await admin.close();

@@ -1,7 +1,7 @@
-import { Kafka, type Producer } from "kafkajs";
+// src/kafka/producer.ts
+import { Producer, stringSerializers } from "@platformatic/kafka";
 import { config } from "../config/index.ts";
 import type { NormalizedEvent } from "../types.ts";
-import { buildKafkaConfig } from "./clientConfig.ts";
 
 export type EventProducer = {
   publishRaw(resourceId: string, raw: unknown): Promise<void>;
@@ -12,28 +12,25 @@ export type EventProducer = {
 };
 
 export async function createProducer(clientId: string): Promise<EventProducer> {
-  const kafka = new Kafka(buildKafkaConfig(clientId));
-  const producer: Producer = kafka.producer({ allowAutoTopicCreation: true });
-  await producer.connect();
-  let connected = true;
+  const producer = new Producer<string, string, string, string>({
+    clientId,
+    bootstrapBrokers: config.kafka.brokers,
+    serializers: stringSerializers,
+  });
 
-  producer.on(producer.events.DISCONNECT, () => {
-    connected = false;
-  });
-  producer.on(producer.events.CONNECT, () => {
-    connected = true;
-  });
+  let connected = true;
 
   return {
     isConnected: () => connected,
     async disconnect() {
-      await producer.disconnect();
+      connected = false;
+      await producer.close();
     },
     async publishRaw(resourceId, raw) {
       await producer.send({
-        topic: config.kafka.topics.raw,
         messages: [
           {
+            topic: config.kafka.topics.raw,
             key: resourceId,
             value: JSON.stringify({
               receivedAt: new Date().toISOString(),
@@ -45,9 +42,9 @@ export async function createProducer(clientId: string): Promise<EventProducer> {
     },
     async publishNormalized(event) {
       await producer.send({
-        topic: config.kafka.topics.events,
         messages: [
           {
+            topic: config.kafka.topics.events,
             key: event.routingKey,
             value: JSON.stringify(event),
             headers: {
@@ -63,10 +60,10 @@ export async function createProducer(clientId: string): Promise<EventProducer> {
     },
     async publishDlq(reason, payload, key) {
       await producer.send({
-        topic: config.kafka.topics.dlq,
         messages: [
           {
-            key: key ?? null,
+            topic: config.kafka.topics.dlq,
+            key: key ?? "",
             value: JSON.stringify({
               receivedAt: new Date().toISOString(),
               reason,
