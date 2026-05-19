@@ -98,5 +98,11 @@ describe("dlqTopic rule", () => {
       },
     ]);
     expect(r.success).toBe(false);
+    if (!r.success) {
+      // Both the mismatch rule and the dedup rule fire here; assert the
+      // dedup message explicitly so future deletion of the dedup check
+      // would be caught by this test.
+      expect(r.error.issues.some((i) => /duplicate dlqTopic/.test(i.message))).toBe(true);
+    }
   });
 });

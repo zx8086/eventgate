@@ -54,4 +54,8 @@ describe("ROUTES_JSON override", () => {
     const cfg = buildConfig({ ...baseEnv, ROUTES_JSON: "not json" });
     expect(cfg.routes[0]?.name).toBe("elastic-autoops");
   });
+
+  it("rejects empty ROUTES_JSON array (defaults are not used as a fallback)", () => {
+    expect(() => buildConfig({ ...baseEnv, ROUTES_JSON: "[]" })).toThrow(/Invalid configuration/);
+  });
 });

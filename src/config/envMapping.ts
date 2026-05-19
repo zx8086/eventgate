@@ -60,9 +60,12 @@ function jsonArray(v: string | undefined): unknown[] | undefined {
   if (s === undefined) return undefined;
   try {
     const parsed = JSON.parse(s);
+    // Non-array values fall back to defaults rather than crash the process.
+    // Operator typos surface via Zod when a valid array is provided instead.
     if (!Array.isArray(parsed)) return undefined;
     return parsed;
   } catch {
+    // Malformed JSON falls back to defaults; same reasoning as above.
     return undefined;
   }
 }
@@ -134,7 +137,12 @@ export function mapEnv(env: RawEnv): EnvOverrides {
 
   for (const k of Object.keys(overrides) as (keyof EnvOverrides)[]) {
     const section = overrides[k];
-    if (section && typeof section === "object" && Object.keys(section).length === 0) {
+    if (
+      section &&
+      typeof section === "object" &&
+      !Array.isArray(section) &&
+      Object.keys(section).length === 0
+    ) {
       delete overrides[k];
     }
   }
