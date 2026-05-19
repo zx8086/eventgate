@@ -1,10 +1,8 @@
 // src/gateway/routes.ts
-import { config } from "../config/index.ts";
 import type { EventProducer } from "../kafka/producer.ts";
-import { normalizeElasticAutoOps } from "../normalize.ts";
-import type { OutboxWriter } from "../outbox/writer.ts";
-import { autoOpsWebhookSchema, isSyntheticAutoOpsTest, normalizeAutoOpsBody } from "./schema.ts";
 import { getLogger } from "../logging/index.ts";
+import type { OutboxWriter } from "../outbox/writer.ts";
+import { autoOpsIdempotencyKey } from "./idempotencyKey.ts";
 
 const log = getLogger("gateway.routes");
 
@@ -13,6 +11,16 @@ export type RouteDeps = {
   outbox?: OutboxWriter;
 };
 
+function pickKey(body: unknown): string {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return "unkeyed";
+  const b = body as Record<string, unknown>;
+  for (const k of ["resourceId", "deployment-id"]) {
+    const v = b[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return "unkeyed";
+}
+
 export function buildRoutes(deps: RouteDeps) {
   const { producer, outbox } = deps;
 
@@ -20,10 +28,9 @@ export function buildRoutes(deps: RouteDeps) {
     "/healthz": () => {
       const stats = outbox?.backlogStats();
       const producerOk = producer.isConnected();
-      const ok = producerOk;
       return Response.json(
         {
-          ok,
+          ok: producerOk,
           producer: { connected: producerOk },
           outbox: stats
             ? {
@@ -34,7 +41,7 @@ export function buildRoutes(deps: RouteDeps) {
               }
             : { enabled: false },
         },
-        { status: ok ? 200 : 503 },
+        { status: producerOk ? 200 : 503 },
       );
     },
 
@@ -50,66 +57,26 @@ export function buildRoutes(deps: RouteDeps) {
           );
         }
 
-        if (isSyntheticAutoOpsTest(body)) {
-          log.info({ body }, "autoops synthetic validate received");
-          return Response.json(
-            { accepted: true, validation: "synthetic" },
-            { status: 202 },
-          );
-        }
+        const messageKey = pickKey(body);
+        const idempotencyKey = autoOpsIdempotencyKey(body);
+        const headers: Record<string, string> = { source: "elastic-autoops" };
+        if (idempotencyKey) headers.idempotencyKey = idempotencyKey;
 
-        const normalized = normalizeAutoOpsBody(body);
-        const result = autoOpsWebhookSchema.safeParse(normalized);
-        if (!result.success) {
-          log.warn(
-            { issues: result.error.issues, body },
-            "schema validation failed",
-          );
-          return Response.json(
-            {
-              accepted: false,
-              error: "schema validation failed",
-              issues: result.error.issues,
-            },
-            { status: 400 },
-          );
-        }
-        const parsed = result.data;
-
-        const event = normalizeElasticAutoOps(parsed, {
-          tenant: config.app.tenant,
-          environment: config.app.environment,
+        const payload = JSON.stringify({
+          receivedAt: new Date().toISOString(),
+          raw: body,
         });
-
-        log.info({ event }, "autoops.event.received");
 
         if (outbox) {
           try {
-            outbox.enqueuePair(
-              {
-                topic: "raw",
-                messageKey: parsed.resourceId,
-                payload: JSON.stringify({
-                  receivedAt: new Date().toISOString(),
-                  raw: body,
-                }),
-                headers: null,
-              },
-              {
-                topic: "events",
-                messageKey: event.routingKey,
-                payload: JSON.stringify(event),
-                headers: {
-                  source: event.source,
-                  eventType: event.eventType,
-                  severity: event.alert.severity,
-                  schemaVersion: String(event.schemaVersion),
-                  idempotencyKey: event.idempotencyKey,
-                },
-              },
-            );
+            outbox.enqueue({
+              topic: "raw",
+              messageKey,
+              payload,
+              headers,
+            });
           } catch (err) {
-            log.error({ err, resourceId: parsed.resourceId }, "outbox enqueue failed");
+            log.error({ err, messageKey }, "outbox enqueue failed");
             return Response.json(
               { accepted: false, error: "outbox enqueue failed" },
               { status: 500 },
@@ -117,24 +84,13 @@ export function buildRoutes(deps: RouteDeps) {
           }
         } else {
           try {
-            await producer.publishRaw(parsed.resourceId, body);
-            await producer.publishNormalized(event);
+            await producer.publishRaw(messageKey, body);
           } catch (err) {
-            log.warn(
-              { err, resourceId: parsed.resourceId },
-              "kafka publish failed; event logged only",
-            );
+            log.warn({ err, messageKey }, "kafka publish failed; will not retry without outbox");
           }
         }
 
-        return Response.json(
-          {
-            accepted: true,
-            resourceId: event.resource.id,
-            idempotencyKey: event.idempotencyKey,
-          },
-          { status: 202 },
-        );
+        return Response.json({ accepted: true }, { status: 202 });
       },
     },
   };
