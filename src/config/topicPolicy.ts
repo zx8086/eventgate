@@ -9,8 +9,7 @@ const GATEWAY_TOPIC_REGEX = /^T_PRIVATE_SOURCE_[A-Z][A-Z0-9]*_[A-Z][A-Z0-9]*(_[A
 type Check = { ok: true } | { ok: false; message: string };
 
 export function isGatewayTopic(topic: string): boolean {
-  if (topic.length === 0 || topic.length > KAFKA_MAX_TOPIC_LENGTH) return false;
-  return GATEWAY_TOPIC_REGEX.test(topic);
+  return checkGatewayTopic(topic).ok;
 }
 
 export function checkGatewayTopic(topic: string): Check {

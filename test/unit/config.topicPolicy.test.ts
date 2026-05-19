@@ -6,7 +6,7 @@ describe("isGatewayTopic", () => {
   it("accepts T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>", () => {
     expect(isGatewayTopic("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS")).toBe(true);
     expect(isGatewayTopic("T_PRIVATE_SOURCE_DATADOG_ALERTS")).toBe(true);
-    expect(isGatewayTopic("T_PRIVATE_SOURCE_GITHUB_PR_EVENTS")).toBe(true);
+    expect(isGatewayTopic("T_PRIVATE_SOURCE_GITHUB_PULLREQUESTS")).toBe(true);
   });
 
   it("rejects lowercase", () => {
@@ -75,6 +75,18 @@ describe("checkGatewayTopic", () => {
     const r = checkGatewayTopic(long);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toMatch(/length/i);
+  });
+
+  it("returns a distinct message for empty topic", () => {
+    const r = checkGatewayTopic("");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/non-empty/i);
+  });
+
+  it("returns a distinct message for internal event/notification streams", () => {
+    const r = checkGatewayTopic("T_PRIVATE_SOURCE_FOO_EVENTS");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/internal event/i);
   });
 });
 
