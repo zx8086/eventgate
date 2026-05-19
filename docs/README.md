@@ -30,7 +30,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 
 | Document | Description |
 |----------|-------------|
-| [overview.md](architecture/overview.md) | Gateway architecture, Kafka topics, normalization contract |
+| [overview.md](architecture/overview.md) | Gateway architecture, Kafka topics, accept-everything contract |
 | [kafka-provider-factory.md](architecture/kafka-provider-factory.md) | Provider abstraction for local / MSK / Confluent backends |
 | [outbox.md](architecture/outbox.md) | SQLite outbox + drainer for durability against Kafka outages |
 
@@ -96,8 +96,8 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 ### Key Capabilities
 
 - Receives Elastic AutoOps webhook notifications over HTTP.
-- Validates and normalizes payloads with a lenient Zod schema that tolerates hyphenated and camelCase keys, both `open`/`close` and `opened`/`closed` status spellings, and AutoOps' synthetic "Validate" body.
-- Publishes raw and normalized events to Kafka for replay and downstream consumption.
+- Accepts any valid JSON body — non-JSON bodies return 400, everything else returns 202. No Zod validation or normalization at the gateway.
+- Writes one row per request to `ops.elastic.autoops.raw.v1` via the SQLite outbox for replay; an opportunistic `idempotencyKey` is attached as a Kafka header when it can be derived from the body.
 - Connects to local Redpanda, AWS MSK, or Confluent Cloud via a provider factory — selected entirely by environment variables.
 
 ### Technology Stack
@@ -109,7 +109,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 | HTTP server | `Bun.serve()` with object-style routes |
 | Kafka client | `@platformatic/kafka` |
 | Kafka backends | Local Redpanda \| AWS MSK (IAM/TLS/none) \| Confluent Cloud (SASL/PLAIN + TLS) |
-| Validation | Zod v4 with `.strictObject()` and `.superRefine()` |
+| Validation | Zod v4 with `.strictObject()` and `.superRefine()` (config only; webhook body is accepted as-is) |
 | Logging | Pino 10 with `@elastic/ecs-pino-format`, synchronous destination |
 | Container | Tiered Dockerfile (distroless Tier 2 default, Alpine Tier 1 fallback) |
 | Orchestrator | AWS ECS Fargate, one image and one task definition |
@@ -118,9 +118,9 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 
 | Resource | Purpose |
 |----------|---------|
-| `ops.elastic.autoops.raw.v1` | Verbatim webhook body for replay |
-| `ops.elastic.autoops.events.v1` | Normalized events; consumed by downstream services |
-| `ops.elastic.autoops.dlq.v1` | DLQ slot reserved for downstream consumers |
+| `ops.elastic.autoops.raw.v1` | Verbatim webhook body for replay — the only topic the gateway writes to |
+| `ops.elastic.autoops.events.v1` | Reserved for future normalization consumers; gateway does not publish here |
+| `ops.elastic.autoops.dlq.v1` | Reserved for future downstream consumers; gateway does not publish here |
 
 ---
 
