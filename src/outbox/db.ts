@@ -20,6 +20,15 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS idx_outbox_drain ON outbox (status, next_attempt_at);
 `;
 
+// Rewrites legacy rows written before the topic-naming policy was introduced.
+// Pre-change deployments only had one route ("raw"), so the only possible
+// legacy value is "raw" -> T_PRIVATE_SOURCE_ELASTIC_AUTOOPS.
+export function runOutboxMigrations(db: OutboxDatabase): void {
+  db.run(
+    "UPDATE outbox SET topic = 'T_PRIVATE_SOURCE_ELASTIC_AUTOOPS' WHERE topic = 'raw'",
+  );
+}
+
 export function openOutbox(dbPath: string): OutboxDatabase {
   const db = new Database(dbPath, { create: true, strict: true });
   if (dbPath !== ":memory:") {
@@ -28,6 +37,7 @@ export function openOutbox(dbPath: string): OutboxDatabase {
   }
   db.run("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  runOutboxMigrations(db);
   return db;
 }
 
