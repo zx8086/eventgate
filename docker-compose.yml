@@ -1,6 +1,6 @@
 services:
   redpanda:
-    image: redpandadata/redpanda:v24.2.7
+    image: redpandadata/redpanda:v25.3.14
     container_name: eventgate-redpanda
     command:
       - redpanda
@@ -25,7 +25,7 @@ services:
       retries: 10
 
   redpanda-init:
-    image: redpandadata/redpanda:v24.2.7
+    image: redpandadata/redpanda:v25.3.14
     container_name: eventgate-redpanda-init
     depends_on:
       redpanda:
