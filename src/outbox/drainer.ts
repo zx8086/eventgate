@@ -46,14 +46,10 @@ type PendingRow = {
 };
 
 function topicToKafka(topic: string, topics: DrainerConfig["topics"]): string {
-  switch (topic as OutboxTopic) {
-    case "raw":
-      return topics.raw;
-    case "events":
-      return topics.events;
-    case "dlq":
-      return topics.dlq;
-  }
+  // Outbox only supports "raw" today (SIO-801). Other topic families are
+  // reserved for future consumers and are written by them, not by this drainer.
+  void (topic as OutboxTopic);
+  return topics.raw;
 }
 
 function parseHeaders(raw: string | null): Record<string, string> | null {

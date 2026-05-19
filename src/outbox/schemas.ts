@@ -2,7 +2,7 @@
 import { z } from "zod";
 
 export const outboxTopicSchema = z
-  .enum(["raw", "events", "dlq"])
+  .enum(["raw"])
   .describe("Which configured Kafka topic family this row should publish to.");
 
 export type OutboxTopic = z.infer<typeof outboxTopicSchema>;
