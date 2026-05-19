@@ -1,4 +1,14 @@
-# Plan: Bun-based Elastic AutoOps webhook ingestion service (`eventgate`)
+# V1 Implementation Plan
+
+> **Targets:** Bun 1.3.11+ | TypeScript 5.x
+> **Last updated:** 2026-05-19
+> **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
+
+Original implementation plan for the eventgate v1 service. Kept for historical reference — the architecture, file layout, and dependencies described here match what shipped, but details have evolved since. For the current state see [../architecture/overview.md](../architecture/overview.md), [../api/webhooks.md](../api/webhooks.md), and [../configuration/environment-variables.md](../configuration/environment-variables.md).
+
+---
+
+## Original plan title: Bun-based Elastic AutoOps webhook ingestion service (`eventgate`)
 
 ## Context
 
@@ -193,3 +203,9 @@ Optional: point an actual AutoOps connector at `https://<tunnel>/webhooks/elasti
 - Couchbase Kafka Sink Connector (custom consumer is sufficient and gives us projection control).
 - Slack/PagerDuty fan-out consumers — separate topic consumers in v3.
 - Dockerfile for the apps — added once deployment target is chosen (ECS, k8s, Fly, etc.).
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-05-19 | Moved from `docs/plan.md` and metadata block added. Original plan content retained verbatim. |

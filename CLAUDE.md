@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Project-specific documentation lives under `docs/` (index at `docs/README.md`), organised per `guides/documentation-guide.md`. Portable, project-agnostic patterns live under `guides/`. When adding a doc, place it in the matching `docs/` subdirectory and update `docs/README.md`.
+
 ## Project Overview
 
 eventgate is a Bun ingestion service for Elastic AutoOps webhook notifications. Two independent processes share configuration and types but only ever communicate through Kafka. Flow: Elastic AutoOps → HTTP gateway (Bun.serve) → Kafka (Redpanda locally) → Couchbase writer → `autoops_events` (history) + `autoops_state` (rolling state).

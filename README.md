@@ -2,6 +2,8 @@
 
 A Bun-based ingestion service for [Elastic AutoOps](https://www.elastic.co/docs/deploy-manage/monitor/autoops) webhook notifications. Receives AutoOps POSTs, normalizes them, publishes to Kafka, and projects them into Couchbase for operational queries and trend analysis.
 
+> Full project documentation: [`docs/README.md`](docs/README.md). Portable Bun programming guides: [`guides/`](guides/).
+
 ```
 Elastic AutoOps  --POST-->  Bun gateway  --produce-->  Kafka  --consume-->  Couchbase
                                                        topics
