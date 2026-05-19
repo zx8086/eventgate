@@ -9,6 +9,9 @@ dist/
 .vscode/
 coverage/
 
+# Claude Code session/agent state — never commit
+.claude/
+
 # AWS deployment state (resource ARNs, IDs)
 scripts/deploy/.env.aws
 
