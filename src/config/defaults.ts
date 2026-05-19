@@ -37,6 +37,16 @@ export const defaults = {
   observability: {
     logLevel: "info" as const,
   },
+  outbox: {
+    enabled: true,
+    dbPath: "./data/outbox.db",
+    batchSize: 100,
+    backoffMaxMs: 600_000,
+    maxAgeHours: 24,
+    idlePollMs: 5_000,
+    busyPollMs: 250,
+    backlogWarnThreshold: 50_000,
+  },
 } as const;
 
 export type Defaults = typeof defaults;

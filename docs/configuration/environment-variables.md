@@ -75,6 +75,21 @@ Required when `KAFKA_PROVIDER=confluent`.
 
 See [../operations/logging.md](../operations/logging.md) for output format and recommended levels per environment.
 
+## Outbox (SQLite durability layer)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OUTBOX_ENABLED` | `true` | When `false`, the gateway publishes to Kafka inline (legacy behavior). Accepts `true|false|1|0|yes|no` (case-insensitive). |
+| `OUTBOX_DB_PATH` | `./data/outbox.db` | SQLite database file. Use `:memory:` for ephemeral tests. Parent directory is created on startup. |
+| `OUTBOX_BATCH_SIZE` | `100` | Maximum rows the drainer fetches per loop iteration. |
+| `OUTBOX_BACKOFF_MAX_MS` | `600000` | Cap on exponential backoff between retries, in ms (default 10 minutes). |
+| `OUTBOX_MAX_AGE_HOURS` | `24` | Rows older than this become `status='failed'` and stop retrying. |
+| `OUTBOX_IDLE_POLL_MS` | `5000` | Drainer poll interval when the previous batch was empty. |
+| `OUTBOX_BUSY_POLL_MS` | `250` | Drainer poll interval when the previous batch was full. |
+| `OUTBOX_BACKLOG_WARN` | `50000` | Pending-row count above which the drainer logs a warn each iteration. |
+
+See [../architecture/outbox.md](../architecture/outbox.md) for the full design.
+
 ## Production Safety Refinements
 
 When `ENVIRONMENT=prod`, `src/config/schemas.ts` runs additional checks via `.superRefine()`:
@@ -120,3 +135,4 @@ LOG_LEVEL=debug
 |------|--------|
 | 2026-05-19 | Initial environment variable reference created |
 | 2026-05-19 | Replaced Couchbase + KAFKA_BROKERS/AUTH/REGION with Kafka provider factory env vars (SIO-795) |
+| 2026-05-19 | Added `OUTBOX_*` env vars for the SQLite outbox layer (SIO-799) |

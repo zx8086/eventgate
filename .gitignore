@@ -12,6 +12,12 @@ coverage/
 # AWS deployment state (resource ARNs, IDs)
 scripts/deploy/.env.aws
 
+# SQLite outbox local state
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # guides/ is a symlink to a centrally-managed stow package
 # (shared across multiple projects), not project-local content.
 guides

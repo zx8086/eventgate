@@ -13,6 +13,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 | Run the service locally | [development/getting-started.md](development/getting-started.md) |
 | Understand the gateway architecture | [architecture/overview.md](architecture/overview.md) |
 | Switch Kafka backend (local / MSK / Confluent) | [architecture/kafka-provider-factory.md](architecture/kafka-provider-factory.md) |
+| Understand the SQLite outbox / Kafka durability | [architecture/outbox.md](architecture/outbox.md) |
 | Look up an environment variable | [configuration/environment-variables.md](configuration/environment-variables.md) |
 | Deploy to AWS ECS Fargate | [deployment/aws-ecs.md](deployment/aws-ecs.md) |
 | Understand the container image (Tier 1 / Tier 2) | [deployment/container-image.md](deployment/container-image.md) |
@@ -31,6 +32,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 |----------|-------------|
 | [overview.md](architecture/overview.md) | Gateway architecture, Kafka topics, normalization contract |
 | [kafka-provider-factory.md](architecture/kafka-provider-factory.md) | Provider abstraction for local / MSK / Confluent backends |
+| [outbox.md](architecture/outbox.md) | SQLite outbox + drainer for durability against Kafka outages |
 
 ### API
 
@@ -128,3 +130,4 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 |------|--------|
 | 2026-05-19 | Initial documentation index created |
 | 2026-05-19 | Refactored to gateway-only architecture with Kafka provider factory (SIO-795) |
+| 2026-05-19 | Added SQLite outbox for gateway durability against Kafka outages (SIO-799) |

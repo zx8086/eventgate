@@ -13,10 +13,31 @@ export type EnvOverrides = {
     confluent?: { bootstrapServers?: string; apiKey?: string; apiSecret?: string };
   };
   observability?: { logLevel?: string };
+  outbox?: {
+    enabled?: boolean;
+    dbPath?: string;
+    batchSize?: number;
+    backoffMaxMs?: number;
+    maxAgeHours?: number;
+    idlePollMs?: number;
+    busyPollMs?: number;
+    backlogWarnThreshold?: number;
+  };
 };
 
 function str(v: string | undefined): string | undefined {
-  return v !== undefined && v !== "" ? v : undefined;
+  if (v === undefined) return undefined;
+  const trimmed = v.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+function bool(v: string | undefined): boolean | undefined {
+  const s = str(v);
+  if (s === undefined) return undefined;
+  const lower = s.toLowerCase();
+  if (lower === "true" || lower === "1" || lower === "yes") return true;
+  if (lower === "false" || lower === "0" || lower === "no") return false;
+  return undefined;
 }
 
 function num(v: string | undefined): number | undefined {
@@ -80,6 +101,16 @@ export function mapEnv(env: RawEnv): EnvOverrides {
     }),
     observability: filterUndefined({
       logLevel: str(env.LOG_LEVEL),
+    }),
+    outbox: filterUndefined({
+      enabled: bool(env.OUTBOX_ENABLED),
+      dbPath: str(env.OUTBOX_DB_PATH),
+      batchSize: num(env.OUTBOX_BATCH_SIZE),
+      backoffMaxMs: num(env.OUTBOX_BACKOFF_MAX_MS),
+      maxAgeHours: num(env.OUTBOX_MAX_AGE_HOURS),
+      idlePollMs: num(env.OUTBOX_IDLE_POLL_MS),
+      busyPollMs: num(env.OUTBOX_BUSY_POLL_MS),
+      backlogWarnThreshold: num(env.OUTBOX_BACKLOG_WARN),
     }),
   };
 
