@@ -57,6 +57,45 @@ export const configSchema = z
     observability: z.strictObject({
       logLevel: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]),
     }),
+    outbox: z.strictObject({
+      enabled: z
+        .boolean()
+        .describe("Whether to use the SQLite outbox. When false, publishes inline (escape hatch)."),
+      dbPath: z
+        .string()
+        .min(1)
+        .describe("SQLite database file path. Use ':memory:' for tests."),
+      batchSize: z
+        .number()
+        .int()
+        .positive()
+        .describe("Maximum rows the drainer fetches per loop iteration."),
+      backoffMaxMs: z
+        .number()
+        .int()
+        .positive()
+        .describe("Cap on exponential backoff delay between retries, in ms."),
+      maxAgeHours: z
+        .number()
+        .int()
+        .positive()
+        .describe("After this age, a stuck row is marked 'failed' and surfaced via /healthz."),
+      idlePollMs: z
+        .number()
+        .int()
+        .positive()
+        .describe("Drainer poll interval when the previous batch was empty."),
+      busyPollMs: z
+        .number()
+        .int()
+        .positive()
+        .describe("Drainer poll interval when the previous batch was full."),
+      backlogWarnThreshold: z
+        .number()
+        .int()
+        .positive()
+        .describe("Pending-row count above which the gateway logs a warn each iteration."),
+    }),
   })
   .superRefine((cfg, ctx) => {
     const { kafka, app } = cfg;

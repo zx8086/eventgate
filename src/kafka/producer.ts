@@ -8,6 +8,12 @@ export type EventProducer = {
   publishRaw(resourceId: string, raw: unknown): Promise<void>;
   publishNormalized(event: NormalizedEvent): Promise<void>;
   publishDlq(reason: string, payload: unknown, key?: string): Promise<void>;
+  sendByTopic(
+    topic: string,
+    key: string,
+    value: string,
+    headers?: Record<string, string> | null,
+  ): Promise<void>;
   isConnected(): boolean;
   disconnect(): Promise<void>;
 };
@@ -84,5 +90,24 @@ export async function createProducer(
         ],
       });
     },
+    async sendByTopic(topic, key, value, headers) {
+      await producer.send({
+        messages: [
+          {
+            topic,
+            key,
+            value,
+            ...(headers ? { headers } : {}),
+          },
+        ],
+      });
+    },
   };
+}
+
+export function resolveOutboxTopic(
+  topic: "raw" | "events" | "dlq",
+  topics: { raw: string; events: string; dlq: string },
+): string {
+  return topics[topic];
 }

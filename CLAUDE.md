@@ -6,11 +6,11 @@ Project-specific documentation lives under `docs/` (index at `docs/README.md`), 
 
 ## Project Overview
 
-eventgate is a single-process Bun ingestion service for Elastic AutoOps webhook notifications. Flow: Elastic AutoOps → HTTP gateway (Bun.serve) → Kafka (Redpanda locally / AWS MSK / Confluent Cloud). Anything downstream of Kafka (alerting, projection, storage) lives in other services as separate consumers on the events topic.
+eventgate is a single-process Bun ingestion service for Elastic AutoOps webhook notifications. Flow: Elastic AutoOps → HTTP gateway (Bun.serve) → local SQLite outbox → Kafka (Redpanda locally / AWS MSK / Confluent Cloud). The outbox makes accepted webhooks durable against Kafka outages; a background drainer in the same Bun process publishes pending rows with exponential backoff. Anything downstream of Kafka (alerting, projection, storage) lives in other services as separate consumers on the events topic.
 
 ## Current State
 
-Single-package Bun project (no workspaces). Conforms to the team `guides/` for: Zod v4 schemas with `.describe()` and `.safeParse()` at boundaries, the 4-pillar configuration pattern (`src/config/{defaults,envMapping,schemas,loader,index}.ts`), Pino 10 + ECS NDJSON logging via `@elastic/ecs-pino-format` with a synchronous Bun-compatible destination, and `bunfig.toml` test wiring with a silent-log preload. Tests live under `test/unit/`. Kafka backend selection is abstracted behind a `KafkaProvider` factory (`src/kafka/providers/`) — local Redpanda, AWS MSK (IAM/TLS/none), or Confluent Cloud (SASL/PLAIN + TLS). Phases explicitly deferred: OpenTelemetry instrumentation, webhook auth.
+Single-package Bun project (no workspaces). Conforms to the team `guides/` for: Zod v4 schemas with `.describe()` and `.safeParse()` at boundaries, the 4-pillar configuration pattern (`src/config/{defaults,envMapping,schemas,loader,index}.ts`), Pino 10 + ECS NDJSON logging via `@elastic/ecs-pino-format` with a synchronous Bun-compatible destination, and `bunfig.toml` test wiring with a silent-log preload. Tests live under `test/unit/`. Kafka backend selection is abstracted behind a `KafkaProvider` factory (`src/kafka/providers/`) — local Redpanda, AWS MSK (IAM/TLS/none), or Confluent Cloud (SASL/PLAIN + TLS). Webhook durability is provided by an in-process SQLite outbox (`src/outbox/`, `bun:sqlite`) drained asynchronously to Kafka with age-based give-up. Phases explicitly deferred: OpenTelemetry instrumentation, webhook auth.
 
 ## Architecture
 
@@ -32,6 +32,12 @@ src/
       index.ts            createKafkaProvider(config) factory
   logging/
     index.ts              ILogger + Pino+ECS factory (sync destination)
+  outbox/
+    db.ts                 bun:sqlite Database, migrations, WAL pragmas, close handling
+    schemas.ts            Zod OutboxRow + topic/status enums
+    writer.ts             enqueuePair(raw, normalized) — single SQLite transaction
+    drainer.ts            polling loop, exponential backoff, age-based give-up
+    backoff.ts            pure: nextDelayMs(attempts, capMs)
   normalize.ts            pure normalization (severity, status, ids)
   types.ts                shared TS types (no Zod here)
 test/
@@ -39,15 +45,19 @@ test/
   unit/
     normalize.test.ts
     config.kafka-provider.test.ts
+    config.outbox.test.ts
     kafka.providers.factory.test.ts
     kafka.providers.msk.test.ts
+    outbox.backoff.test.ts
+    outbox.writer.test.ts
+    outbox.drainer.test.ts
 ```
 
 ### Single-process model
 
 | Process | Entry | Responsibility |
 |---|---|---|
-| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — validate (Zod `.safeParse`), normalize, publish raw + normalized events, return 202. `/healthz` reports producer status (503 when disconnected). Kafka publish failures are logged at `warn` but still return 202 (receive-fast, process-async). |
+| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — validate (Zod `.safeParse`), normalize, `outbox.enqueuePair(raw, normalized)` in one SQLite transaction, return 202. The outbox drainer (`src/outbox/drainer.ts`) publishes to Kafka in the background with exponential backoff. `/healthz` reports producer status and outbox stats (`pending`, `failed`, `oldestPendingAgeMs`); 503 when the producer is disconnected. Outbox enqueue failures (disk full etc.) return 500. `OUTBOX_ENABLED=false` falls back to inline publish (escape hatch). |
 
 Add new downstream behavior (Slack, PagerDuty, aggregates, sinks into a database) as a **separate consumer group** on `ops.elastic.autoops.events.v1` in another service — never bolt it into the gateway.
 
@@ -67,6 +77,19 @@ Selected by `KAFKA_PROVIDER`. The factory (`src/kafka/providers/index.ts:createK
 
 Portable pattern lives at `guides/kafka-provider-factory.md`. Project-specific application at `docs/architecture/kafka-provider-factory.md`.
 
+### SQLite outbox (`src/outbox/`)
+
+In-process durable buffer between HTTP accept and Kafka publish, using `bun:sqlite` (synchronous, native to Bun, no external service).
+
+- **Write path** (`writer.ts`): `enqueuePair(raw, normalized)` inserts both rows in one `db.transaction()` so a `raw` row never exists without its `events` partner.
+- **Drain path** (`drainer.ts`): polls `WHERE status='pending' AND next_attempt_at<=now`, publishes via `producer.sendByTopic(...)`. Busy cadence (`busyPollMs`, default 250ms) when the previous batch was full; idle (`idlePollMs`, default 5s) otherwise.
+- **Retry semantics**: exponential backoff `min(2^(attempts-1) * 1s, backoffMaxMs)` (cap 10min by default). At-least-once; downstream consumers dedupe on the `idempotencyKey` Kafka header.
+- **Give-up rule**: age-based. When `now - created_at > maxAgeHours * 1h`, row is marked `status='failed'`, surfaced via `/healthz` and a warn log. No attempt-count cap.
+- **Durability**: `journal_mode=WAL` and `synchronous=NORMAL` on file-backed DBs. On close, `SQLITE_FCNTL_PERSIST_WAL=0` + `wal_checkpoint(TRUNCATE)` so `-wal`/`-shm` sidecars don't linger on macOS (Apple's system SQLite enables persistent WAL by default).
+- **Escape hatch**: `OUTBOX_ENABLED=false` makes the gateway publish inline (legacy behavior); no SQLite is opened. `/healthz` reports `outbox: { enabled: false }`.
+
+Project-specific application at `docs/architecture/outbox.md`.
+
 ### Normalization contract (`src/normalize.ts`)
 
 - `alertSignature = slugify(resourceId :: title)` — stable across the open + close pair of the same alert; useful for downstream rollup.
@@ -80,6 +103,7 @@ config.app.{name, version, environment, tenant}
 config.server.{port}
 config.kafka.{provider, clientId, topics:{raw, events, dlq}, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
 config.observability.{logLevel}
+config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
 ```
 
 - `src/config/defaults.ts` — every key has a default; `version` comes from `package.json`. Default provider is `local`.
@@ -170,4 +194,6 @@ ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments (non-obvious
 
 ## Out of scope (do not add without discussion)
 
-Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, OpenTelemetry instrumentation, Bun workspace catalogs (single-package repo), any database integration in this repo (downstream consumers own their storage), runtime provider switching (KAFKA_PROVIDER is read once at startup), connection pooling at the provider layer.
+Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, OpenTelemetry instrumentation, Bun workspace catalogs (single-package repo), runtime provider switching (KAFKA_PROVIDER is read once at startup), connection pooling at the provider layer, CDC-style outbox draining (Debezium etc. — we are the publisher), multi-process outbox drainers (single-writer per file), a CLI for replaying `failed` outbox rows (defer until the first incident calls for it), Bun Worker threads for the drainer, exactly-once Kafka delivery (downstream dedupes on `idempotencyKey`).
+
+> Note: the outbox is **not** a "database integration in this repo" in the originally-deferred sense — that exclusion is about *downstream* domain storage. The outbox is a transport-layer durability buffer for the gateway itself.
