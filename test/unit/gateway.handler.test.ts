@@ -94,4 +94,18 @@ describe("makeWebhookHandler", () => {
     await handler(postJson({ resourceId: "dep-1", title: "t", status: "open" }));
     expect(outbox.calls[0]?.headers?.idempotencyKey).toBeUndefined();
   });
+
+  it("falls back to inline producer when outbox is absent and returns 202", async () => {
+    const published: unknown[] = [];
+    const spyProducer = {
+      ...noopProducer,
+      publishRaw: async (_key: string, body: unknown) => {
+        published.push(body);
+      },
+    };
+    const handler = makeWebhookHandler(baseRoute, { producer: spyProducer });
+    const res = await handler(postJson({ resourceId: "dep-1" }));
+    expect(res.status).toBe(202);
+    expect(published).toHaveLength(1);
+  });
 });

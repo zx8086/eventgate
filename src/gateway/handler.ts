@@ -43,12 +43,11 @@ export function makeWebhookHandler(route: RouteConfig, deps: HandlerDeps) {
     const headers: Record<string, string> = { source: sourceHeader };
     if (idempotencyKey) headers.idempotencyKey = idempotencyKey;
 
-    const payload = JSON.stringify({
-      receivedAt: new Date().toISOString(),
-      raw: body,
-    });
-
     if (outbox) {
+      const payload = JSON.stringify({
+        receivedAt: new Date().toISOString(),
+        raw: body,
+      });
       try {
         outbox.enqueue({
           topic: route.topic,
