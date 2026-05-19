@@ -36,6 +36,9 @@ describe("knownIdempotencyStrategy", () => {
   it("returns false for unknown names", () => {
     expect(knownIdempotencyStrategy("does-not-exist")).toBe(false);
   });
+  it("returns false for __proto__", () => {
+    expect(knownIdempotencyStrategy("__proto__")).toBe(false);
+  });
 });
 
 describe("resolveIdempotencyStrategy", () => {
@@ -47,5 +50,8 @@ describe("resolveIdempotencyStrategy", () => {
   });
   it("returns undefined for unknown name (defensive at runtime)", () => {
     expect(resolveIdempotencyStrategy("nope")).toBeUndefined();
+  });
+  it("returns undefined for __proto__ (prototype-pollution probe)", () => {
+    expect(resolveIdempotencyStrategy("__proto__")).toBeUndefined();
   });
 });

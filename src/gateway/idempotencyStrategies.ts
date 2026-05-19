@@ -15,5 +15,6 @@ export function resolveIdempotencyStrategy(
   name: string | undefined,
 ): IdempotencyStrategy | undefined {
   if (name === undefined) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(idempotencyStrategies, name)) return undefined;
   return idempotencyStrategies[name];
 }
