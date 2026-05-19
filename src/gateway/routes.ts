@@ -1,4 +1,5 @@
 // src/gateway/routes.ts
+import { config } from "../config/index.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { getLogger } from "../logging/index.ts";
 import type { OutboxWriter } from "../outbox/writer.ts";
@@ -69,8 +70,11 @@ export function buildRoutes(deps: RouteDeps) {
 
         if (outbox) {
           try {
+            // Bridge: routes.ts will iterate config.routes in Task 9. Until then,
+            // publish the AutoOps webhook to the real topic name, not the outbox
+            // enum key — the drainer's topicToKafka mapping was removed in Tasks 5+6.
             outbox.enqueue({
-              topic: "raw",
+              topic: config.kafka.topics.raw,
               messageKey,
               payload,
               headers,

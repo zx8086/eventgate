@@ -56,7 +56,7 @@ describe("POST /webhooks/elastic/autoops", () => {
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ accepted: true });
     expect(rows).toHaveLength(1);
-    expect(rows[0].topic).toBe("raw");
+    expect(rows[0].topic).toBe("ops.elastic.autoops.raw.v1");
     expect(rows[0].messageKey).toBe("unkeyed");
     expect(rows[0].headers).toEqual({ source: "elastic-autoops" });
     const payload = JSON.parse(rows[0].payload) as { receivedAt: string; raw: unknown };
