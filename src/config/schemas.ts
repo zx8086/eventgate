@@ -17,6 +17,14 @@ export const configSchema = z
       clientIdGateway: z.string().min(1),
       clientIdWriter: z.string().min(1),
       groupId: z.string().min(1),
+      auth: z
+        .enum(["none", "iam"])
+        .describe("Kafka SASL mechanism. 'none' for local Redpanda, 'iam' for AWS MSK Serverless."),
+      region: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("AWS region for MSK IAM SASL token signing. Required when auth='iam'."),
       topics: z.strictObject({
         raw: z.string().min(1),
         events: z.string().min(1),
@@ -24,6 +32,7 @@ export const configSchema = z
       }),
     }),
     couchbase: z.strictObject({
+      enabled: z.boolean().describe("When false, the writer logs events only and skips Couchbase."),
       connStr: z
         .string()
         .regex(/^couchbases?:\/\/.+/, "must start with couchbase:// or couchbases://"),
@@ -39,7 +48,32 @@ export const configSchema = z
     }),
   })
   .superRefine((cfg, ctx) => {
+    if (cfg.kafka.auth === "iam" && !cfg.kafka.region) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["kafka", "region"],
+        message: "kafka.region is required when auth=iam",
+      });
+    }
+
     if (cfg.app.environment !== "prod") return;
+
+    if (cfg.kafka.auth !== "iam") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["kafka", "auth"],
+        message: "kafka.auth=iam is required in prod",
+      });
+    }
+    if (cfg.kafka.brokers.some((b) => b.includes("localhost"))) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["kafka", "brokers"],
+        message: "localhost brokers are not allowed in prod",
+      });
+    }
+
+    if (!cfg.couchbase.enabled) return;
 
     if (cfg.couchbase.connStr.includes("localhost")) {
       ctx.addIssue({
@@ -60,13 +94,6 @@ export const configSchema = z
         code: "custom",
         path: ["couchbase", "password"],
         message: "default password is not allowed in prod",
-      });
-    }
-    if (cfg.kafka.brokers.some((b) => b.includes("localhost"))) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["kafka", "brokers"],
-        message: "localhost brokers are not allowed in prod",
       });
     }
   });

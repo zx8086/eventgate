@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+.env
+.env.*
+!.env.example
+node_modules
+test
+docs
+scripts
+docker-compose.yml
+README.md
+*.md
+bunfig.toml

@@ -101,3 +101,11 @@ Tests cover the pure normalization and projection logic (`src/__tests__/`). Kafk
 - Couchbase Kafka Sink Connector (custom consumer is sufficient and gives us projection control).
 - Slack / PagerDuty fan-out consumers — added in a later phase as separate consumer groups on `ops.elastic.autoops.events.v1`.
 - Dockerfile for gateway/writer — added once the deployment target is chosen.
+
+## AWS deployment (v1)
+
+Manual deploy scripts under `scripts/deploy/` stand up the gateway + writer on ECS Fargate in `eu-central-1`, backed by MSK Serverless. Couchbase is disabled in v1 — the writer logs normalized events to CloudWatch (`/eventgate/writer`).
+
+See [`scripts/deploy/README.md`](scripts/deploy/README.md) for the runbook. The webhook URL is the ALB DNS name printed by `12-print-url.sh`.
+
+To tear the stack down: `scripts/deploy/teardown.sh` (interactive confirmation).

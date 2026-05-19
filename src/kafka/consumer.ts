@@ -1,13 +1,16 @@
-import { Kafka, logLevel, type Consumer } from "kafkajs";
+// src/kafka/consumer.ts
+import { Consumer, stringDeserializers } from "@platformatic/kafka";
 import { config } from "../config/index.ts";
 
-export async function createConsumer(clientId: string, groupId: string): Promise<Consumer> {
-  const kafka = new Kafka({
+export function createConsumer(
+  clientId: string,
+  groupId: string,
+): Consumer<string, string, string, string> {
+  return new Consumer<string, string, string, string>({
     clientId,
-    brokers: config.kafka.brokers,
-    logLevel: logLevel.INFO,
+    groupId,
+    bootstrapBrokers: config.kafka.brokers,
+    deserializers: stringDeserializers,
+    autocommit: 5000,
   });
-  const consumer = kafka.consumer({ groupId });
-  await consumer.connect();
-  return consumer;
 }

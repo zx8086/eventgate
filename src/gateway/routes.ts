@@ -2,7 +2,7 @@
 import { config } from "../config/index.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { normalizeElasticAutoOps } from "../normalize.ts";
-import { autoOpsWebhookSchema } from "./schema.ts";
+import { autoOpsWebhookSchema, isSyntheticAutoOpsTest, normalizeAutoOpsBody } from "./schema.ts";
 import { getLogger } from "../logging/index.ts";
 
 const log = getLogger("gateway.routes");
@@ -26,8 +26,21 @@ export function buildRoutes(producer: EventProducer) {
           );
         }
 
-        const result = autoOpsWebhookSchema.safeParse(body);
+        if (isSyntheticAutoOpsTest(body)) {
+          log.info({ body }, "autoops synthetic validate received");
+          return Response.json(
+            { accepted: true, validation: "synthetic" },
+            { status: 202 },
+          );
+        }
+
+        const normalized = normalizeAutoOpsBody(body);
+        const result = autoOpsWebhookSchema.safeParse(normalized);
         if (!result.success) {
+          log.warn(
+            { issues: result.error.issues, body },
+            "schema validation failed",
+          );
           return Response.json(
             {
               accepted: false,
@@ -50,11 +63,7 @@ export function buildRoutes(producer: EventProducer) {
           await producer.publishRaw(parsed.resourceId, body);
           await producer.publishNormalized(event);
         } catch (err) {
-          log.error({ err, resourceId: parsed.resourceId }, "kafka publish failed");
-          return Response.json(
-            { accepted: false, error: "downstream publish failed" },
-            { status: 503 },
-          );
+          log.warn({ err, resourceId: parsed.resourceId }, "kafka publish failed; event logged only");
         }
 
         return Response.json(

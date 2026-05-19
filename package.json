@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@elastic/ecs-pino-format": "^1.5.0",
+    "@platformatic/kafka": "^2.1.0",
     "couchbase": "^4.4.0",
-    "kafkajs": "^2.2.4",
     "pino": "^10.3.1",
     "zod": "^4.3"
   },
