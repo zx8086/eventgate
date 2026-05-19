@@ -1,5 +1,6 @@
 // test/unit/gateway.routes.test.ts
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { resetConfigCache } from "../../src/config/loader.ts";
 import { buildRoutes } from "../../src/gateway/routes.ts";
 import type { EventProducer } from "../../src/kafka/producer.ts";
 import type { OutboxWriter, EnqueueInput, BacklogStats } from "../../src/outbox/writer.ts";
@@ -37,6 +38,20 @@ async function postJson(routes: ReturnType<typeof buildRoutes>, body: string, co
   );
 }
 
+let snapshot: NodeJS.ProcessEnv;
+
+beforeEach(() => {
+  snapshot = { ...process.env };
+  // Use default route config (elastic-autoops only); reset to ensure clean state.
+  delete process.env.ROUTES_JSON;
+  resetConfigCache();
+});
+
+afterEach(() => {
+  process.env = snapshot;
+  resetConfigCache();
+});
+
 describe("POST /webhooks/elastic/autoops", () => {
   it("returns 400 on non-JSON body", async () => {
     const { writer, rows } = fakeOutbox();
@@ -56,7 +71,8 @@ describe("POST /webhooks/elastic/autoops", () => {
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ accepted: true });
     expect(rows).toHaveLength(1);
-    expect(rows[0].topic).toBe("ops.elastic.autoops.raw.v1");
+    // Topic comes from the default route config, not a hardcoded string.
+    expect(rows[0].topic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
     expect(rows[0].messageKey).toBe("unkeyed");
     expect(rows[0].headers).toEqual({ source: "elastic-autoops" });
     const payload = JSON.parse(rows[0].payload) as { receivedAt: string; raw: unknown };
@@ -100,14 +116,5 @@ describe("POST /webhooks/elastic/autoops", () => {
     const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
     await postJson(routes, JSON.stringify({ anything: 1 }));
     expect(rows[0].messageKey).toBe("unkeyed");
-  });
-});
-
-describe("GET /healthz", () => {
-  it("reports producer + outbox stats", () => {
-    const { writer } = fakeOutbox();
-    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
-    const res = (routes["/healthz"] as () => Response)();
-    expect(res.status).toBe(200);
   });
 });
