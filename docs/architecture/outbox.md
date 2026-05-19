@@ -4,20 +4,20 @@
 
 ## Problem
 
-Before the outbox, `src/gateway/routes.ts` published raw + normalized events inline. If Kafka was unreachable the calls threw, the handler logged a `warn`, and still returned `202`. AutoOps does not retry, so an outage permanently dropped events.
+Before the outbox, `src/gateway/routes.ts` published to Kafka inline. If Kafka was unreachable the call threw, the handler logged a `warn`, and still returned `202`. AutoOps does not retry, so an outage permanently dropped events.
 
 ## Solution
 
-The webhook path now writes both events into a local SQLite table in one transaction and returns `202`. A background drainer in the same Bun process publishes pending rows to Kafka with exponential backoff. Downstream consumers already dedupe on the `idempotencyKey` Kafka header, so at-least-once delivery is safe.
+The webhook path now writes the raw event into a local SQLite table and returns `202`. A background drainer in the same Bun process publishes pending rows to Kafka with exponential backoff. Downstream consumers can dedupe on the opportunistic `idempotencyKey` Kafka header, so at-least-once delivery is safe.
 
 ## Flow
 
 ```
 POST /webhooks/elastic/autoops
    │
-   ▼ validate (Zod) + normalize
+   ▼ parse JSON
    │
-   ▼ outbox.enqueuePair(rawRow, normalizedRow)   ── single SQLite transaction
+   ▼ outbox.enqueue(rawRow)
    │
    ▼ 202 Accepted
 
@@ -25,7 +25,7 @@ POST /webhooks/elastic/autoops
 
   OutboxDrainer (busy: busyPollMs, idle: idlePollMs)
     SELECT … WHERE status='pending' AND next_attempt_at<=now LIMIT batchSize
-    for row: producer.sendByTopic(...)
+    for row: producer.sendByTopic(...)   // publishes to raw.v1
       success → UPDATE status='dispatched', dispatched_at=now
       failure → UPDATE attempts++, next_attempt_at=now+backoff(attempts),
                 last_error=…; if (now - created_at) > maxAgeMs → status='failed'
@@ -37,7 +37,7 @@ POST /webhooks/elastic/autoops
 src/outbox/
   db.ts          openOutbox(dbPath) — Database + WAL + macOS sidecar cleanup on close
   schemas.ts     Zod OutboxRow, OutboxTopic, OutboxStatus
-  writer.ts     createWriter(db) → { enqueuePair, backlogStats }
+  writer.ts      createWriter(db) → { enqueue, backlogStats }
   drainer.ts     runOutboxIteration (pure-testable) + startDrainer (loop)
   backoff.ts     nextDelayMs(attempts, capMs) — min(2^(attempts-1) * 1s, capMs)
 ```
@@ -49,7 +49,7 @@ Wiring lives in `src/gateway/index.ts` and `src/gateway/routes.ts`.
 ```sql
 CREATE TABLE IF NOT EXISTS outbox (
   id              TEXT PRIMARY KEY,         -- crypto.randomUUID()
-  topic           TEXT NOT NULL,            -- raw | events | dlq
+  topic           TEXT NOT NULL,            -- raw (only value currently written)
   message_key     TEXT NOT NULL,
   payload         TEXT NOT NULL,            -- JSON.stringify(value)
   headers         TEXT,                     -- JSON object or NULL
@@ -71,11 +71,11 @@ On close (`closeOutbox`), the code runs `db.fileControl(SQLITE_FCNTL_PERSIST_WAL
 
 ## Topic mapping
 
-The drainer is topic-agnostic. Each row stores a logical topic family (`raw` | `events` | `dlq`); the drainer resolves it to the configured Kafka topic name from `config.kafka.topics` at publish time. That means renaming a topic in config does not require a database migration — only undispatched rows continue to use the new name.
+The drainer is topic-agnostic. Each row stores a logical topic family (currently only `raw`); the drainer resolves it to the configured Kafka topic name from `config.kafka.topics` at publish time. That means renaming a topic in config does not require a database migration — only undispatched rows continue to use the new name.
 
 ## Delivery semantics
 
-- **At-least-once** to Kafka. Downstream consumers dedupe on the `idempotencyKey` Kafka header (`src/kafka/producer.ts`).
+- **At-least-once** to Kafka. Downstream consumers may dedupe on the opportunistic `idempotencyKey` Kafka header (`src/kafka/producer.ts`), set by the gateway when the body looks AutoOps-shaped.
 - **Exponential backoff**: `min(2^(attempts-1) * 1000ms, backoffMaxMs)`. Default cap 10 minutes. The first retry waits 1s; the curve is 1, 2, 4, 8, 16, 32, 64, …, then flat at the cap.
 - **Give-up rule is age-based, not count-based**: when `now - created_at > maxAgeHours * 3600 * 1000`, the row transitions to `status='failed'`, the drainer logs a warn with `idempotencyKey`, and the row is surfaced in `/healthz`. Default 24 hours.
 - **Backpressure**: when pending rows exceed `backlogWarnThreshold` (default 50k), the drainer logs a warn each iteration. The gateway never returns 503 from backlog — the right behavior is to buffer.
@@ -121,7 +121,7 @@ Setting `OUTBOX_ENABLED=false` switches the gateway back to inline publish (the 
 ## Testing
 
 - `outbox.backoff.test.ts` — pure backoff curve.
-- `outbox.writer.test.ts` — atomic enqueue, **rollback on partial failure**, header JSON serialization, backlog stats.
+- `outbox.writer.test.ts` — single-row enqueue, header JSON serialization, backlog stats.
 - `outbox.drainer.test.ts` — drives `runOutboxIteration` with a fake producer; covers publish, retry-with-backoff, age-based fail, future-row skip, batch-size limit, header forwarding.
 - `config.outbox.test.ts` — defaults, env overrides (incl. boolean parsing), schema invariants.
 

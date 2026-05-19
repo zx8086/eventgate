@@ -1,20 +1,22 @@
 # eventgate
 
-A Bun-based ingestion service for [Elastic AutoOps](https://www.elastic.co/docs/deploy-manage/monitor/autoops) webhook notifications. Receives AutoOps POSTs, normalizes them, and publishes to Kafka for downstream consumers.
+eventgate is a single-process Bun service that ingests Elastic AutoOps webhook
+notifications and durably persists them to Kafka. The gateway accepts any valid
+JSON POST and writes it verbatim to `raw.v1` via a local SQLite outbox.
+Validation, normalization, alerting, and projection are concerns for downstream
+consumers in other services.
 
 > Full project documentation: [`docs/README.md`](docs/README.md). Portable Bun programming guides: [`guides/`](guides/).
 
 ```
-Elastic AutoOps  --POST-->  Bun gateway  --produce-->  Kafka
-                                                       topics
-                                                       - ops.elastic.autoops.raw.v1
-                                                       - ops.elastic.autoops.events.v1
-                                                       - ops.elastic.autoops.dlq.v1
+Elastic AutoOps  --POST-->  Bun gateway  --enqueue-->  SQLite outbox  --publish-->  Kafka raw.v1
 ```
 
 Single process:
 
-- `gateway` (`src/gateway/index.ts`) — HTTP receiver at `POST /webhooks/elastic/autoops`. Validates, normalizes, publishes raw + normalized events to Kafka, returns 202.
+- `gateway` (`src/gateway/index.ts`) — HTTP receiver at `POST /webhooks/elastic/autoops`. Accepts any valid JSON, enqueues it into the SQLite outbox, returns 202. A background drainer in the same Bun process publishes pending rows to `ops.elastic.autoops.raw.v1`.
+
+Topics `ops.elastic.autoops.events.v1` and `ops.elastic.autoops.dlq.v1` stay provisioned but are reserved for future consumer services — the gateway does not write them.
 
 Kafka backend selection (local Redpanda / AWS MSK / Confluent Cloud) is abstracted behind a `KafkaProvider` factory under `src/kafka/providers/`. See [`docs/architecture/kafka-provider-factory.md`](docs/architecture/kafka-provider-factory.md).
 
@@ -42,19 +44,19 @@ curl -X POST http://localhost:3000/webhooks/elastic/autoops \
   }'
 ```
 
-Expect a `202` with `{ accepted, resourceId, idempotencyKey }`.
+Expect a `202` with `{ accepted: true }`. When the body is AutoOps-shaped, the response also includes `resourceId` and `idempotencyKey` (set as an opportunistic Kafka header).
 
 Confirm the message landed in Kafka:
 
 ```bash
-docker exec eventgate-redpanda rpk topic consume ops.elastic.autoops.events.v1 -n 1
+docker exec eventgate-redpanda rpk topic consume ops.elastic.autoops.raw.v1 -n 1
 ```
 
 ## AutoOps webhook contract
 
-The connector lets you template the request body with these variables (per the [Notifications Settings docs](https://www.elastic.co/docs/deploy-manage/monitor/autoops/ec-autoops-notifications-settings)): `RESOURCE_ID`, `RESOURCE_NAME`, `TITLE`, `DESCRIPTION`, `SEVERITY` (`High|Medium|Low`), `STATUS` (`open|close`), `MESSAGE`, `START_TIME`, `END_TIME`, `ENDPOINT_TYPE`, `AFFECTED_NODES`, `AFFECTED_INDICES`, `EVENT_LINK`.
+The gateway does not validate the body shape — any valid JSON is accepted and forwarded to `raw.v1`. For reference, the AutoOps connector lets you template the request body with these variables (per the [Notifications Settings docs](https://www.elastic.co/docs/deploy-manage/monitor/autoops/ec-autoops-notifications-settings)): `RESOURCE_ID`, `RESOURCE_NAME`, `TITLE`, `DESCRIPTION`, `SEVERITY` (`High|Medium|Low`), `STATUS` (`open|close`), `MESSAGE`, `START_TIME`, `END_TIME`, `ENDPOINT_TYPE`, `AFFECTED_NODES`, `AFFECTED_INDICES`, `EVENT_LINK`.
 
-Configure the AutoOps connector body to map those to the camelCase fields this service expects:
+A typical AutoOps connector body maps those to camelCase fields:
 
 ```json
 {
@@ -74,10 +76,7 @@ Configure the AutoOps connector body to map those to the camelCase fields this s
 }
 ```
 
-## Normalization
-
-- `alertSignature = slugify(resourceId :: title)` — stable across the open + close pair of the same alert; useful for downstream rollup.
-- `idempotencyKey = sha256(resourceId :: title :: status :: startTime :: endTime)` — stable across retries of the same delivery. Returned in the 202 body and emitted as a Kafka header.
+When the body looks AutoOps-shaped, the gateway opportunistically computes an `idempotencyKey = sha256(resourceId :: title :: status :: startTime :: endTime)` and emits it as a Kafka header. Downstream consumers may dedupe on it. Bodies that do not match this shape are still accepted and forwarded — they just do not get the header.
 
 ## Tests
 
@@ -86,14 +85,14 @@ bun test
 bun run typecheck
 ```
 
-Tests cover the pure normalization logic, config validation, and the Kafka provider factory (`test/unit/`). Kafka I/O is exercised manually via the smoke test above.
+Tests cover the outbox (writer, drainer, backoff), the opportunistic idempotency-key helper, config validation, and the Kafka provider factory (`test/unit/`). Kafka I/O is exercised manually via the smoke test above.
 
 ## Out of scope for v1
 
 - **Webhook auth.** AutoOps webhook connectors expose only Name, URL, Method, custom Headers, and Body — no native HMAC/bearer/basic-auth. Operators should put the gateway behind ALB/Cloudflare Access or similar until v2 adds shared-token header validation.
 - Flink rolling aggregates.
 - Any database integration in this repo — downstream consumers own their storage.
-- Slack / PagerDuty fan-out consumers — added later as separate consumer groups on `ops.elastic.autoops.events.v1`.
+- Slack / PagerDuty fan-out consumers — added later as separate services consuming from `ops.elastic.autoops.raw.v1` (or from a future `events.v1` published by a downstream normalizer).
 
 ## AWS deployment
 
