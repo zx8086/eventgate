@@ -11,3 +11,8 @@ coverage/
 
 # AWS deployment state (resource ARNs, IDs)
 scripts/deploy/.env.aws
+
+# guides/ is a symlink to a centrally-managed stow package
+# (shared across multiple projects), not project-local content.
+guides
+guides/
