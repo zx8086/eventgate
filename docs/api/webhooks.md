@@ -131,21 +131,18 @@ No body, no headers required.
 | `200 OK` | Kafka producer is connected | `{ "ok": true }` |
 | `503 Service Unavailable` | Kafka producer is not connected | `{ "ok": false }` |
 
-The ALB target-group healthcheck and the Dockerfile `HEALTHCHECK` both target this path. The healthcheck deliberately does not probe Couchbase — the gateway does not call Couchbase, so it would be the wrong dependency to gate on.
+The ALB target-group healthcheck and the Dockerfile `HEALTHCHECK` both target this path. The healthcheck only probes the gateway's own producer state; it does not probe any downstream system.
 
 ## Idempotency Contract
 
-The gateway computes two identifiers from each accepted payload:
+The gateway computes two identifiers from each accepted payload and emits them on the normalized event:
 
-| Identifier | Formula | Used as |
+| Identifier | Formula | Use |
 |-----------|---------|---------|
-| `alertSignature` | `slugify(resourceId :: title)` | Part of the rolling state document key in Couchbase. Stable across the open + close pair of the same alert. |
-| `idempotencyKey` | `sha256(resourceId :: title :: status :: startTime :: endTime)` | Returned in the `202` response body. Part of the history document key in Couchbase. Stable across retries of the same delivery; differs between the open and close of the same alert because `status` differs. |
+| `alertSignature` | `slugify(resourceId :: title)` | Stable across the open + close pair of the same alert. Available to downstream consumers via the message body and the `routingKey`. |
+| `idempotencyKey` | `sha256(resourceId :: title :: status :: startTime :: endTime)` | Returned in the `202` response body and emitted as a Kafka header. Stable across retries of the same delivery; differs between the open and close of the same alert because `status` differs. |
 
-This means:
-
-- **Retries of the same delivery** (e.g. AutoOps marks the first send as failed and resends) write the same history document on the writer side and increment the state document only on the second, third, ... delivery if you do not guard on `idempotencyKey`. The writer currently increments unconditionally — see [../architecture/overview.md#idempotency-guarantee](../architecture/overview.md#idempotency-guarantee).
-- **An open + close pair** of the same alert produces two history documents (different `idempotencyKey`) and one state document (same `alertSignature`).
+Downstream consumers are responsible for deduping on `idempotencyKey` if their write path is not naturally idempotent.
 
 ## Synthetic Validation Body
 
@@ -162,6 +159,7 @@ Each accepted webhook delivery logs one `autoops.event.received` line at `info` 
 ## See Also
 
 - [../architecture/overview.md](../architecture/overview.md) — the normalization contract that defines `alertSignature` and `idempotencyKey`.
+- [../architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md) — which Kafka backend the producer is connected to.
 - [../development/getting-started.md](../development/getting-started.md) — local curl + smoke test.
 - [../operations/logging.md](../operations/logging.md) — how to find webhook deliveries in CloudWatch.
 
@@ -170,3 +168,4 @@ Each accepted webhook delivery logs one `autoops.event.received` line at `info` 
 | Date | Change |
 |------|--------|
 | 2026-05-19 | Initial webhooks API doc created |
+| 2026-05-19 | Removed writer/Couchbase references from the idempotency section (SIO-795) |

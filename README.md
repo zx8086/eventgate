@@ -1,21 +1,22 @@
 # eventgate
 
-A Bun-based ingestion service for [Elastic AutoOps](https://www.elastic.co/docs/deploy-manage/monitor/autoops) webhook notifications. Receives AutoOps POSTs, normalizes them, publishes to Kafka, and projects them into Couchbase for operational queries and trend analysis.
+A Bun-based ingestion service for [Elastic AutoOps](https://www.elastic.co/docs/deploy-manage/monitor/autoops) webhook notifications. Receives AutoOps POSTs, normalizes them, and publishes to Kafka for downstream consumers.
 
 > Full project documentation: [`docs/README.md`](docs/README.md). Portable Bun programming guides: [`guides/`](guides/).
 
 ```
-Elastic AutoOps  --POST-->  Bun gateway  --produce-->  Kafka  --consume-->  Couchbase
+Elastic AutoOps  --POST-->  Bun gateway  --produce-->  Kafka
                                                        topics
                                                        - ops.elastic.autoops.raw.v1
                                                        - ops.elastic.autoops.events.v1
                                                        - ops.elastic.autoops.dlq.v1
 ```
 
-Two processes:
+Single process:
 
 - `gateway` (`src/gateway/index.ts`) — HTTP receiver at `POST /webhooks/elastic/autoops`. Validates, normalizes, publishes raw + normalized events to Kafka, returns 202.
-- `writer` (`src/writer/index.ts`) — Kafka consumer that upserts append-only history docs and rolling state docs into Couchbase. Sends malformed messages to a DLQ topic.
+
+Kafka backend selection (local Redpanda / AWS MSK / Confluent Cloud) is abstracted behind a `KafkaProvider` factory under `src/kafka/providers/`. See [`docs/architecture/kafka-provider-factory.md`](docs/architecture/kafka-provider-factory.md).
 
 ## Quick start
 
@@ -23,18 +24,7 @@ Two processes:
 bun install
 cp .env.example .env
 docker compose up -d
-```
-
-Create the Couchbase bucket and collections via the UI at http://localhost:8091 (default creds `Administrator` / `password`):
-
-1. Create bucket `ops`.
-2. Under the `_default` scope, create collections `autoops_events` and `autoops_state`.
-
-Then in two terminals:
-
-```bash
 bun run dev:gateway
-bun run dev:writer
 ```
 
 Send a test payload:
@@ -53,6 +43,12 @@ curl -X POST http://localhost:3000/webhooks/elastic/autoops \
 ```
 
 Expect a `202` with `{ accepted, resourceId, idempotencyKey }`.
+
+Confirm the message landed in Kafka:
+
+```bash
+docker exec eventgate-redpanda rpk topic consume ops.elastic.autoops.events.v1 -n 1
+```
 
 ## AutoOps webhook contract
 
@@ -78,14 +74,10 @@ Configure the AutoOps connector body to map those to the camelCase fields this s
 }
 ```
 
-## Couchbase document model
+## Normalization
 
-- `autoops_events` — append-only history, key `autoops::event::<resourceId>::<occurredAt>::<idempotencyKey>`. Source of truth for replay and trend analysis.
-- `autoops_state` — rolling current state per alert, key `autoops::state::<resourceId>::<alertSignature>`. Tracks `currentStatus`, `openCount`, `closeCount`, `firstSeenAt`, `lastSeenAt`, `isOpen`.
-
-`alertSignature` is `slugify(resourceId :: title)` so open + close events for the same alert roll up into one state doc.
-
-`idempotencyKey` is `sha256(resourceId :: title :: status :: startTime :: endTime)` so retries of the same delivery are upserts and an open + close pair produce two distinct history docs.
+- `alertSignature = slugify(resourceId :: title)` — stable across the open + close pair of the same alert; useful for downstream rollup.
+- `idempotencyKey = sha256(resourceId :: title :: status :: startTime :: endTime)` — stable across retries of the same delivery. Returned in the 202 body and emitted as a Kafka header.
 
 ## Tests
 
@@ -94,20 +86,19 @@ bun test
 bun run typecheck
 ```
 
-Tests cover the pure normalization and projection logic (`src/__tests__/`). Kafka and Couchbase integration are exercised manually via the smoke test above.
+Tests cover the pure normalization logic, config validation, and the Kafka provider factory (`test/unit/`). Kafka I/O is exercised manually via the smoke test above.
 
 ## Out of scope for v1
 
 - **Webhook auth.** AutoOps webhook connectors expose only Name, URL, Method, custom Headers, and Body — no native HMAC/bearer/basic-auth. Operators should put the gateway behind ALB/Cloudflare Access or similar until v2 adds shared-token header validation.
 - Flink rolling aggregates.
-- Couchbase Kafka Sink Connector (custom consumer is sufficient and gives us projection control).
-- Slack / PagerDuty fan-out consumers — added in a later phase as separate consumer groups on `ops.elastic.autoops.events.v1`.
-- Dockerfile for gateway/writer — added once the deployment target is chosen.
+- Any database integration in this repo — downstream consumers own their storage.
+- Slack / PagerDuty fan-out consumers — added later as separate consumer groups on `ops.elastic.autoops.events.v1`.
 
-## AWS deployment (v1)
+## AWS deployment
 
-Manual deploy scripts under `scripts/deploy/` stand up the gateway + writer on ECS Fargate in `eu-central-1`, backed by MSK Serverless. Couchbase is disabled in v1 — the writer logs normalized events to CloudWatch (`/eventgate/writer`).
+Deploy scripts under `scripts/deploy/` stand up the gateway on ECS Fargate in `eu-central-1`, backed by MSK Serverless. The webhook URL is the ALB DNS name printed by `12-print-url.sh`.
 
-See [`scripts/deploy/README.md`](scripts/deploy/README.md) for the runbook. The webhook URL is the ALB DNS name printed by `12-print-url.sh`.
+See [`docs/deployment/aws-ecs.md`](docs/deployment/aws-ecs.md) for the target topology and [`scripts/deploy/README.md`](scripts/deploy/README.md) for the operator runbook. Note: as of SIO-795, the scripts still provision the older two-service shape (gateway + writer + Couchbase env vars); cleanup of the writer service is tracked separately.
 
 To tear the stack down: `scripts/deploy/teardown.sh` (interactive confirmation).

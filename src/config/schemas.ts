@@ -1,6 +1,34 @@
 // src/config/schemas.ts
 import { z } from "zod";
 
+const localSchema = z.strictObject({
+  bootstrapServers: z
+    .array(z.string().min(1))
+    .min(1)
+    .describe("Bootstrap brokers for local Kafka / Redpanda."),
+});
+
+const mskSchema = z.strictObject({
+  region: z
+    .string()
+    .describe("AWS region of the MSK cluster. Required when provider=msk."),
+  clusterArn: z
+    .string()
+    .describe("MSK cluster ARN. Either this or msk.brokers must be set."),
+  brokers: z
+    .string()
+    .describe("CSV bootstrap brokers. Either this or msk.clusterArn must be set."),
+  authMode: z
+    .enum(["iam", "tls", "none"])
+    .describe("MSK auth mode. 'iam' uses OAUTHBEARER SASL with a short-lived IAM token."),
+});
+
+const confluentSchema = z.strictObject({
+  bootstrapServers: z.string().describe("Confluent Cloud bootstrap servers (host:port)."),
+  apiKey: z.string().describe("Confluent Cloud API key (SASL/PLAIN username)."),
+  apiSecret: z.string().describe("Confluent Cloud API secret (SASL/PLAIN password)."),
+});
+
 export const configSchema = z
   .strictObject({
     app: z.strictObject({
@@ -13,87 +41,60 @@ export const configSchema = z
       port: z.number().int().min(1).max(65535),
     }),
     kafka: z.strictObject({
-      brokers: z.array(z.string().min(1)).min(1).describe("Kafka bootstrap brokers."),
-      clientIdGateway: z.string().min(1),
-      clientIdWriter: z.string().min(1),
-      groupId: z.string().min(1),
-      auth: z
-        .enum(["none", "iam"])
-        .describe("Kafka SASL mechanism. 'none' for local Redpanda, 'iam' for AWS MSK Serverless."),
-      region: z
-        .string()
-        .min(1)
-        .optional()
-        .describe("AWS region for MSK IAM SASL token signing. Required when auth='iam'."),
+      provider: z
+        .enum(["local", "msk", "confluent"])
+        .describe("Which Kafka backend to connect to. Selected by KAFKA_PROVIDER."),
+      clientId: z.string().min(1).describe("Kafka client id used by the producer."),
       topics: z.strictObject({
         raw: z.string().min(1),
         events: z.string().min(1),
         dlq: z.string().min(1),
       }),
-    }),
-    couchbase: z.strictObject({
-      enabled: z.boolean().describe("When false, the writer logs events only and skips Couchbase."),
-      connStr: z
-        .string()
-        .regex(/^couchbases?:\/\/.+/, "must start with couchbase:// or couchbases://"),
-      username: z.string().min(1),
-      password: z.string().min(1),
-      bucket: z.string().min(1),
-      scope: z.string().min(1),
-      historyCollection: z.string().min(1),
-      stateCollection: z.string().min(1),
+      local: localSchema,
+      msk: mskSchema,
+      confluent: confluentSchema,
     }),
     observability: z.strictObject({
       logLevel: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]),
     }),
   })
   .superRefine((cfg, ctx) => {
-    if (cfg.kafka.auth === "iam" && !cfg.kafka.region) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["kafka", "region"],
-        message: "kafka.region is required when auth=iam",
-      });
+    const { kafka, app } = cfg;
+
+    if (kafka.provider === "msk") {
+      if (!kafka.msk.region) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["kafka", "msk", "region"],
+          message: "msk.region is required when provider=msk",
+        });
+      }
+      if (!kafka.msk.clusterArn && !kafka.msk.brokers) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["kafka", "msk"],
+          message: "msk requires either clusterArn or brokers when provider=msk",
+        });
+      }
     }
 
-    if (cfg.app.environment !== "prod") return;
-
-    if (cfg.kafka.auth !== "iam") {
-      ctx.addIssue({
-        code: "custom",
-        path: ["kafka", "auth"],
-        message: "kafka.auth=iam is required in prod",
-      });
-    }
-    if (cfg.kafka.brokers.some((b) => b.includes("localhost"))) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["kafka", "brokers"],
-        message: "localhost brokers are not allowed in prod",
-      });
+    if (kafka.provider === "confluent") {
+      for (const field of ["bootstrapServers", "apiKey", "apiSecret"] as const) {
+        if (!kafka.confluent[field]) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["kafka", "confluent", field],
+            message: `confluent.${field} is required when provider=confluent`,
+          });
+        }
+      }
     }
 
-    if (!cfg.couchbase.enabled) return;
-
-    if (cfg.couchbase.connStr.includes("localhost")) {
+    if (app.environment === "prod" && kafka.provider === "local") {
       ctx.addIssue({
         code: "custom",
-        path: ["couchbase", "connStr"],
-        message: "localhost connection string is not allowed in prod",
-      });
-    }
-    if (!cfg.couchbase.connStr.startsWith("couchbases://")) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["couchbase", "connStr"],
-        message: "TLS (couchbases://) is required in prod",
-      });
-    }
-    if (cfg.couchbase.password === "password") {
-      ctx.addIssue({
-        code: "custom",
-        path: ["couchbase", "password"],
-        message: "default password is not allowed in prod",
+        path: ["kafka", "provider"],
+        message: "provider=local is not allowed in prod; use msk or confluent",
       });
     }
   });

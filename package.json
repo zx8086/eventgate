@@ -5,16 +5,15 @@
   "private": true,
   "scripts": {
     "dev:gateway": "bun run --watch src/gateway/index.ts",
-    "dev:writer": "bun run --watch src/writer/index.ts",
     "start:gateway": "bun run src/gateway/index.ts",
-    "start:writer": "bun run src/writer/index.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-kafka": "^3.620.0",
     "@elastic/ecs-pino-format": "^1.5.0",
     "@platformatic/kafka": "^2.1.0",
-    "couchbase": "^4.4.0",
+    "aws-msk-iam-sasl-signer-js": "^1.0.0",
     "pino": "^10.3.1",
     "zod": "^4.3"
   },

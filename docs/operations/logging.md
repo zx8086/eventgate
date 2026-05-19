@@ -4,7 +4,7 @@
 > **Last updated:** 2026-05-19
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
-eventgate emits structured logs in ECS NDJSON via Pino 10 with `@elastic/ecs-pino-format`. Both processes share one logger factory in `src/logging/index.ts`; each call site obtains a child logger with a `component` binding so the gateway and writer streams can be filtered without the noise of separate log groups merging. This document describes the output shape, how to call the logger, and how the two processes are separated at the CloudWatch level.
+eventgate emits structured logs in ECS NDJSON via Pino 10 with `@elastic/ecs-pino-format`. The logger factory in `src/logging/index.ts` returns child loggers bound to a `component` so each call site can be filtered without losing the service-wide fields.
 
 ## Output Shape
 
@@ -18,14 +18,12 @@ Each log line is a single JSON object on its own line:
 |-------|--------|-------|
 | `@timestamp` | `@elastic/ecs-pino-format` | ISO-8601 UTC |
 | `log.level` | Pino level | `trace` ... `fatal` |
-| `service.name` | `config.app.name` from `package.json` | Same for both processes (`eventgate`) |
+| `service.name` | `config.app.name` from `package.json` | `eventgate` |
 | `service.version` | `config.app.version` from `package.json` | |
 | `service.environment` | `config.app.environment` | `dev`, `staging`, `prod`, `test` |
 | `ecs.version` | `@elastic/ecs-pino-format` | |
-| `component` | `getLogger(component)` call site | Differentiates `gateway`, `gateway.routes`, `writer`, etc. |
+| `component` | `getLogger(component)` call site | `gateway`, `gateway.routes`, `kafka.provider.msk`, etc. |
 | `message` | Second argument to logger call | |
-
-`service.name` is identical for both processes — `component` plus the CloudWatch log group name is how you tell them apart.
 
 ## Calling the Logger
 
@@ -71,23 +69,22 @@ If a future change introduces async log shipping, do it as a sidecar log forward
 
 | Environment | Recommended level | Reason |
 |-------------|------------------|--------|
-| Local dev | `debug` | See routing decisions, schema parses, consumer offsets |
+| Local dev | `debug` | See routing decisions, schema parses, provider selection |
 | `test` | `silent` | Forced by `test/preload.ts` so `bun test` output is clean |
 | `staging` | `info` | Same shape as prod, easier to tail |
 | `prod` | `info` | Avoid log-storm cost on CloudWatch; raise to `debug` per-task only for incidents |
 
-To raise the level on a single ECS task for an incident, register a new task definition revision with `LOG_LEVEL=debug` and update the affected service — do not edit a running task in place.
+To raise the level on a single ECS task for an incident, register a new task definition revision with `LOG_LEVEL=debug` and update the service — do not edit a running task in place.
 
-## CloudWatch Log Groups
+## CloudWatch Log Group
 
-The two ECS task definitions write to separate log groups:
+The ECS task definition writes to a single log group:
 
-| Process | Log group | Stream prefix |
+| Service | Log group | Stream prefix |
 |---------|-----------|---------------|
 | gateway | `/eventgate/gateway` | `ecs` |
-| writer | `/eventgate/writer` | `ecs` |
 
-The split is what makes `service.name=eventgate` on both lines tolerable — filter by log group first, then by `component`. The log groups are created by `scripts/deploy/06-log-groups.sh`.
+The log group is created by `scripts/deploy/06-log-groups.sh`.
 
 ## Useful Filter Patterns
 
@@ -100,14 +97,14 @@ fields @timestamp, component, resourceId, idempotencyKey
 | filter message = "autoops.event.received"
 | sort @timestamp desc
 
-# DLQ activity in the writer
-fields @timestamp, reason, resourceId
-| filter message like /DLQ/
-| sort @timestamp desc
-
-# kafka publish failures (gateway-side)
+# kafka publish failures
 fields @timestamp, err.message, resourceId
 | filter message = "kafka publish failed"
+| sort @timestamp desc
+
+# provider selection at startup
+fields @timestamp, provider, providerType
+| filter message = "kafka provider selected"
 | sort @timestamp desc
 ```
 
@@ -116,19 +113,19 @@ fields @timestamp, err.message, resourceId
 | Log it | Do not log it |
 |--------|---------------|
 | `{ err }` on every caught exception | The full webhook body at `info` (PII risk; AutoOps payloads may include node names and indices that customers consider sensitive) |
-| `resourceId`, `alertSignature`, `idempotencyKey`, `eventType`, `severity` | Couchbase or MSK credentials, even on auth failures |
-| Consumer offsets and partition assignments at `debug` | Verbatim raw Kafka payloads at `info` — they are already on the `raw.v1` topic for replay |
+| `resourceId`, `alertSignature`, `idempotencyKey`, `eventType`, `severity` | MSK / Confluent credentials, even on auth failures |
+| Kafka publish failures with `{ err, resourceId }` | Verbatim raw Kafka payloads at `info` — they are already on the `raw.v1` topic for replay |
 
-The gateway currently logs the parsed body at `warn` when schema validation fails (`src/gateway/routes.ts:40-43`). That is acceptable because validation failures are rare and the operator needs the payload to fix the connector template — but reconsider this if the volume grows.
+The gateway currently logs the parsed body at `warn` when schema validation fails (`src/gateway/routes.ts`). That is acceptable because validation failures are rare and the operator needs the payload to fix the connector template — but reconsider this if the volume grows.
 
 ## Shutdown Logging
 
-Both processes register SIGINT and SIGTERM handlers that log the signal, then call `process.exit(0)` after the producer / consumer / Couchbase client have closed. The synchronous destination guarantees the final `shutting down` line is flushed before the process exits — see `src/gateway/index.ts:37-46` and `src/writer/index.ts:98-111`.
+The gateway registers SIGINT and SIGTERM handlers that log the signal, then call `process.exit(0)` after the producer and provider have closed. The synchronous destination guarantees the final `shutting down gateway` line is flushed before the process exits — see `src/gateway/index.ts`.
 
 ## See Also
 
-- [../architecture/overview.md](../architecture/overview.md) — what each process does (so you know which `component` to filter on).
-- [../deployment/aws-ecs.md](../deployment/aws-ecs.md) — where the log groups are configured.
+- [../architecture/overview.md](../architecture/overview.md) — what the gateway does.
+- [../deployment/aws-ecs.md](../deployment/aws-ecs.md) — where the log group is configured.
 - [../../guides/bun-logging-guide.md](../../guides/bun-logging-guide.md) — project-agnostic logger patterns and Bun-specific gotchas.
 
 ## Changelog
@@ -136,3 +133,4 @@ Both processes register SIGINT and SIGTERM handlers that log the signal, then ca
 | Date | Change |
 |------|--------|
 | 2026-05-19 | Initial logging doc created |
+| 2026-05-19 | Single-process model; removed writer log group (SIO-795) |

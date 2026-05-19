@@ -12,27 +12,27 @@ export const defaults = {
     port: 3000,
   },
   kafka: {
-    brokers: ["localhost:9092"],
-    clientIdGateway: "eventgate-gateway",
-    clientIdWriter: "eventgate-writer",
-    groupId: "autoops-couchbase-writer-v1",
-    auth: "none" as const,
-    region: undefined as string | undefined,
+    provider: "local" as const,
+    clientId: "eventgate-gateway",
     topics: {
       raw: "ops.elastic.autoops.raw.v1",
       events: "ops.elastic.autoops.events.v1",
       dlq: "ops.elastic.autoops.dlq.v1",
     },
-  },
-  couchbase: {
-    enabled: true,
-    connStr: "couchbase://localhost",
-    username: "Administrator",
-    password: "password",
-    bucket: "ops",
-    scope: "_default",
-    historyCollection: "autoops_events",
-    stateCollection: "autoops_state",
+    local: {
+      bootstrapServers: ["localhost:9092"],
+    },
+    msk: {
+      region: "",
+      clusterArn: "",
+      brokers: "",
+      authMode: "iam" as const,
+    },
+    confluent: {
+      bootstrapServers: "",
+      apiKey: "",
+      apiSecret: "",
+    },
   },
   observability: {
     logLevel: "info" as const,

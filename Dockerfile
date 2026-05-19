@@ -6,8 +6,7 @@
 #
 # Bun runs .ts natively, so there is no `bun run build` step — the builder
 # stage stages the source tree and prunes non-runtime artefacts.
-# Single image, two entrypoints: default CMD is the gateway; the writer is
-# launched via task-def command override (CMD ["bun", "src/writer/index.ts"]).
+# Single-process image: gateway only. HTTP in, Kafka out.
 
 ARG BUN_VERSION=1.3.11
 ARG DHI_IMAGE=gcr.io/distroless/static-debian12:nonroot
@@ -68,8 +67,7 @@ ENV NODE_ENV=production \
 
 EXPOSE 3000
 
-# Healthcheck targets the gateway's /healthz. Writer task defs disable this
-# (HEALTHCHECK NONE in the task definition) since the writer has no HTTP server.
+# Healthcheck targets the gateway's /healthz.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["/usr/local/bin/bun", "--eval", \
        "fetch('http://localhost:3000/healthz').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]

@@ -56,34 +56,3 @@ export type NormalizedEvent = {
   raw: unknown;
 };
 
-export type AutoOpsEventHistoryDoc = {
-  docType: "autoopsEvent";
-  resourceId: string;
-  resourceName: string;
-  eventType: EventType;
-  severity: Severity;
-  title: string;
-  occurredAt: string;
-  receivedAt: string;
-  idempotencyKey: string;
-  alertSignature: string;
-  payload: NormalizedAlert;
-  raw: unknown;
-};
-
-export type AutoOpsStateDoc = {
-  docType: "autoopsState";
-  resourceId: string;
-  resourceName: string;
-  alertSignature: string;
-  currentStatus: EventType;
-  currentSeverity: Severity;
-  currentSeverityRank: SeverityRank;
-  firstSeenAt: string;
-  lastSeenAt: string;
-  lastEventId: string;
-  openCount: number;
-  closeCount: number;
-  isOpen: boolean;
-  updatedAt: string;
-};
