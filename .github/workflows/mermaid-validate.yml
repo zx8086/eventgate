@@ -1,0 +1,59 @@
+# Validate every Mermaid block in repo Markdown via mmdc (Mermaid CLI).
+# Background: SIO-804 (PR #16) shipped a Mermaid diagram with a parse error
+# that GitHub's renderer would have silently shown as an error block. Local
+# `mmdc` rendering caught it. This workflow makes that check automatic.
+name: Mermaid Validate
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - '**/*.md'
+      - 'scripts/validate-mermaid.ts'
+      - '.github/workflows/mermaid-validate.yml'
+      - 'test/fixtures/broken-mermaid.md'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - 'scripts/validate-mermaid.ts'
+      - '.github/workflows/mermaid-validate.yml'
+      - 'test/fixtures/broken-mermaid.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # Validate every Mermaid block in tracked Markdown. Excludes the
+      # intentionally-broken fixture under test/fixtures/.
+      - name: Validate repo Mermaid blocks
+        run: bun run validate:mermaid
+
+      # Smoke test the validator itself against a known-broken fixture.
+      # We expect mmdc to exit non-zero; a zero exit means the validator
+      # is silently passing broken diagrams.
+      - name: Smoke test (broken fixture must fail)
+        run: |
+          if bun run validate:mermaid test/fixtures/broken-mermaid.md; then
+            echo "::error::validate-mermaid did NOT fail on the broken fixture"
+            exit 1
+          else
+            echo "ok: validator caught the broken fixture as expected"
+          fi
