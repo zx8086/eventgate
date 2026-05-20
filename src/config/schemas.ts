@@ -223,6 +223,20 @@ export const configSchema = z
         .positive()
         .describe("Pending-row count above which the gateway logs a warn each iteration."),
     }),
+    admin: z
+      .strictObject({
+        token: z
+          .string()
+          .min(32, "ADMIN_TOKEN must be at least 32 characters")
+          .describe("Shared secret protecting the /admin/routes endpoint."),
+      })
+      .optional()
+      .describe("When present, enables the /admin/routes PUT endpoint."),
+    routesFile: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Path to a mounted JSON file holding the routes array. When set, takes precedence over ROUTES_JSON."),
     routes: routesSchema,
   })
   .superRefine((cfg, ctx) => {

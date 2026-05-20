@@ -23,6 +23,8 @@ export type EnvOverrides = {
     busyPollMs?: number;
     backlogWarnThreshold?: number;
   };
+  admin?: { token?: string };
+  routesFile?: string;
   routes?: unknown[];
 };
 
@@ -133,6 +135,16 @@ export function mapEnv(env: RawEnv): EnvOverrides {
   const routes = jsonArray(env.ROUTES_JSON);
   if (routes !== undefined) {
     overrides.routes = routes;
+  }
+
+  const adminToken = str(env.ADMIN_TOKEN);
+  if (adminToken !== undefined) {
+    overrides.admin = { token: adminToken };
+  }
+
+  const routesFileEnv = str(env.ROUTES_FILE);
+  if (routesFileEnv !== undefined) {
+    overrides.routesFile = routesFileEnv;
   }
 
   for (const k of Object.keys(overrides) as (keyof EnvOverrides)[]) {
