@@ -17,6 +17,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 | Understand the SQLite outbox / Kafka durability | [architecture/outbox.md](architecture/outbox.md) |
 | Look up an environment variable | [configuration/environment-variables.md](configuration/environment-variables.md) |
 | Deploy to AWS ECS Fargate | [deployment/aws-ecs.md](deployment/aws-ecs.md) |
+| Copy a task definition with EBS outbox volume | [deployment/task-definition-example.md](deployment/task-definition-example.md) |
 | Understand the container image (Tier 1 / Tier 2) | [deployment/container-image.md](deployment/container-image.md) |
 | Read log output or change log level | [operations/logging.md](operations/logging.md) |
 | Call the webhook or healthcheck endpoint | [api/webhooks.md](api/webhooks.md) |
@@ -53,6 +54,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 | Document | Description |
 |----------|-------------|
 | [aws-ecs.md](deployment/aws-ecs.md) | ECS Fargate deploy: one image, one task definition, one service |
+| [task-definition-example.md](deployment/task-definition-example.md) | Copy-pasteable Fargate task definition + service JSON, CloudFormation, and Terraform with EBS outbox volume |
 | [container-image.md](deployment/container-image.md) | Tiered Dockerfile, build arguments, healthcheck semantics |
 
 ### Development

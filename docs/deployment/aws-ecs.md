@@ -91,6 +91,8 @@ KAFKA_CLIENT_ID=eventgate-gateway
 MSK_REGION=<aws-region>
 MSK_AUTH_MODE=iam
 MSK_CLUSTER_ARN=<arn>          # or MSK_BROKERS=<csv>
+OUTBOX_DB_PATH=/data/outbox.db
+ROUTES_JSON=[ ... ]            # see "Routes" section below
 LOG_LEVEL=info
 ```
 
@@ -101,12 +103,66 @@ ENVIRONMENT=prod
 KAFKA_PROVIDER=confluent
 KAFKA_CLIENT_ID=eventgate-gateway
 CONFLUENT_BOOTSTRAP_SERVERS=<host:port>
+OUTBOX_DB_PATH=/data/outbox.db
+ROUTES_JSON=[ ... ]            # see "Routes" section below
 LOG_LEVEL=info
 ```
 
 `CONFLUENT_API_KEY` and `CONFLUENT_API_SECRET` should be injected from Secrets Manager via the task definition `secrets` block, not inline.
 
 Per-variable detail and refinements live in [../configuration/environment-variables.md](../configuration/environment-variables.md). `ENVIRONMENT=prod` triggers the `.superRefine()` block in `src/config/schemas.ts` — `KAFKA_PROVIDER=local` is rejected, MSK requires region + brokers-or-arn, Confluent requires the full triplet.
+
+## Routes — single or multiple vendors
+
+Routes are baked into the task definition via `ROUTES_JSON`. Each entry pairs an HTTP path with its destination Kafka topic and partition-key strategy. The gateway listens on every declared path and publishes to that route's `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>` topic. To onboard a new vendor: append an object to the array and deploy a new task definition revision. Route changes are deliberately **deploy-time only** on Fargate — the admin endpoint (`PUT /admin/routes` + `ROUTES_FILE`) is not used in this deployment shape because routes change rarely (~once a quarter) and the simpler single-mount setup is worth the brief gap of a rolling deploy.
+
+Single vendor (Elastic AutoOps only):
+
+```json
+ROUTES_JSON=[
+  {
+    "name": "elastic-autoops",
+    "path": "/webhooks/elastic/autoops",
+    "topic": "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    "keyFields": ["resourceId", "deployment-id"],
+    "idempotency": "elastic-autoops"
+  }
+]
+```
+
+Multiple vendors (Elastic + Datadog + GitHub):
+
+```json
+ROUTES_JSON=[
+  {
+    "name": "elastic-autoops",
+    "path": "/webhooks/elastic/autoops",
+    "topic": "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    "keyFields": ["resourceId", "deployment-id"],
+    "idempotency": "elastic-autoops"
+  },
+  {
+    "name": "datadog-alerts",
+    "path": "/webhooks/datadog/alerts",
+    "topic": "T_PRIVATE_SOURCE_DATADOG_ALERTS",
+    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
+    "keyFields": ["alert_id"]
+  },
+  {
+    "name": "github-webhooks",
+    "path": "/webhooks/github/events",
+    "topic": "T_PRIVATE_SOURCE_GITHUB_EVENTS",
+    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_GITHUB_EVENTS",
+    "keyFields": ["repository.full_name", "delivery"]
+  }
+]
+```
+
+The route schema (in `src/config/schemas.ts`) enforces every contract at startup: `topic` must match `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>`, `dlqTopic` (when present) must equal `DLQ_T_<topic>`, `path` must not collide with reserved paths (`/healthz`, `/admin/routes`) or other routes, `idempotency` must reference a registered strategy. Malformed `ROUTES_JSON` crashes the task on boot — ECS rolls back automatically.
+
+A copy-pasteable task definition that ties this together with the EBS volume mount, IAM, log driver, and healthcheck lives in [task-definition-example.md](task-definition-example.md).
 
 ## Scaling
 

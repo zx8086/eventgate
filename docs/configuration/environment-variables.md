@@ -75,6 +75,18 @@ Required when `KAFKA_PROVIDER=confluent`.
 
 See [../operations/logging.md](../operations/logging.md) for output format and recommended levels per environment.
 
+## Routes
+
+The set of webhook routes (path → topic mapping, partition-key fields, idempotency strategy) loads from one of three sources at startup with precedence `ROUTES_FILE > ROUTES_JSON > defaults`. The seed route in `src/config/defaults.ts` covers Elastic AutoOps; everything else is operator-supplied.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROUTES_JSON` | (unset) | JSON-encoded array of route objects. Each entry: `{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempotency?}`. Replaces (does not merge with) the seed route when set. Malformed JSON falls back silently to defaults; a valid array that fails Zod validation crashes the task at startup. |
+| `ROUTES_FILE` | (unset) | Path to a JSON file containing the routes array. Read at startup; takes precedence over `ROUTES_JSON`. Required alongside `ADMIN_TOKEN` to enable the optional `PUT /admin/routes` runtime-mutation endpoint. **Not used in the Fargate deployment shape** — see [../deployment/task-definition-example.md](../deployment/task-definition-example.md). |
+| `ADMIN_TOKEN` | (unset) | Shared secret protecting `/admin/routes`. Min 32 characters. Endpoint is not registered when unset, or when set without `ROUTES_FILE` (in-memory-only mutation would be lost on restart). |
+
+Field-by-field route schema rules (topic prefix policy, DLQ shape, reserved paths, duplicate detection, registered idempotency strategies) live in `src/config/schemas.ts`. See [../superpowers/specs/2026-05-19-config-driven-routes-design.md](../superpowers/specs/2026-05-19-config-driven-routes-design.md) for the original design rationale and [../deployment/aws-ecs.md](../deployment/aws-ecs.md) for the single-vendor and multi-vendor `ROUTES_JSON` examples used in production.
+
 ## Outbox (SQLite durability layer)
 
 | Variable | Default | Description |
