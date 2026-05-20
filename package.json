@@ -7,7 +7,8 @@
     "dev:gateway": "bun run --watch src/gateway/index.ts",
     "start:gateway": "bun run src/gateway/index.ts",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "validate:mermaid": "bun run scripts/validate-mermaid.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kafka": "^3.620.0",
