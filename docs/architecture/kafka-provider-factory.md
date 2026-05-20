@@ -34,9 +34,9 @@ const producer = await createProducer(config.kafka.clientId, provider);
 
 | Provider | Required env vars | Optional |
 |----------|-------------------|----------|
-| `local` (default) | — | `KAFKA_LOCAL_BOOTSTRAP_SERVERS` (default `localhost:9092`) |
-| `msk` | `MSK_REGION` plus one of `MSK_CLUSTER_ARN` / `MSK_BROKERS` | `MSK_AUTH_MODE` (default `iam`) |
-| `confluent` | `CONFLUENT_BOOTSTRAP_SERVERS`, `CONFLUENT_API_KEY`, `CONFLUENT_API_SECRET` | — |
+| `local` (default) | — | `KAFKA_BROKERS` (default `localhost:9092`) |
+| `msk` | `MSK_REGION` plus one of `KAFKA_BROKERS` / `MSK_CLUSTER_ARN` | `MSK_AUTH_MODE` (default `iam`) |
+| `confluent` | `KAFKA_BROKERS`, `CONFLUENT_API_KEY`, `CONFLUENT_API_SECRET` | — |
 
 Two extra rules:
 
@@ -49,12 +49,10 @@ Two extra rules:
 |----------|-----------|---------|
 | `KAFKA_PROVIDER` | all | `local` \| `msk` \| `confluent`. Default `local`. |
 | `KAFKA_CLIENT_ID` | all | Producer client id. Default `eventgate-gateway`. |
-| `KAFKA_LOCAL_BOOTSTRAP_SERVERS` | `local` | CSV bootstrap brokers. Default `localhost:9092`. |
+| `KAFKA_BROKERS` | all | CSV bootstrap brokers (parsed to `string[]`). Default `localhost:9092`. Required for `local`/`confluent`; for `msk` may be omitted when `MSK_CLUSTER_ARN` is set. |
 | `MSK_REGION` | `msk` | AWS region of the MSK cluster. |
-| `MSK_CLUSTER_ARN` | `msk` | Cluster ARN; brokers discovered via `GetBootstrapBrokersCommand`. |
-| `MSK_BROKERS` | `msk` | Skip discovery; CSV bootstrap brokers. One of `MSK_BROKERS` / `MSK_CLUSTER_ARN` required. |
+| `MSK_CLUSTER_ARN` | `msk` | Cluster ARN; when set and `KAFKA_BROKERS` is empty, brokers are discovered via `GetBootstrapBrokersCommand`. One of `KAFKA_BROKERS` / `MSK_CLUSTER_ARN` required. |
 | `MSK_AUTH_MODE` | `msk` | `iam` (default) \| `tls` \| `none`. |
-| `CONFLUENT_BOOTSTRAP_SERVERS` | `confluent` | Bootstrap servers (host:port[,host:port]). |
 | `CONFLUENT_API_KEY` | `confluent` | SASL/PLAIN username. |
 | `CONFLUENT_API_SECRET` | `confluent` | SASL/PLAIN password. |
 
@@ -78,7 +76,7 @@ ENVIRONMENT=prod KAFKA_PROVIDER=msk MSK_REGION=eu-central-1 \
 
 # Confluent (prod-shaped)
 ENVIRONMENT=prod KAFKA_PROVIDER=confluent \
-  CONFLUENT_BOOTSTRAP_SERVERS=pkc-1.eu-central-1.aws.confluent.cloud:9092 \
+  KAFKA_BROKERS=pkc-1.eu-central-1.aws.confluent.cloud:9092 \
   CONFLUENT_API_KEY=k CONFLUENT_API_SECRET=s bun run start:gateway
 
 # Prod-safety: must fail

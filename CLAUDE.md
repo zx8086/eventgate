@@ -108,9 +108,11 @@ Without `ADMIN_TOKEN`, the endpoint is not registered (returns 404). Without `RO
 
 Selected by `KAFKA_PROVIDER`. The factory (`src/kafka/providers/index.ts:createKafkaProvider`) dispatches on the value and returns a `KafkaProvider` that exposes `getConnectionConfig()` and `close()`. The producer (`src/kafka/producer.ts`) is provider-agnostic.
 
-- **local**: `KAFKA_LOCAL_BOOTSTRAP_SERVERS` (default `localhost:9092`).
-- **msk**: `MSK_REGION` + (`MSK_CLUSTER_ARN` or `MSK_BROKERS`); optional `MSK_AUTH_MODE` (iam/tls/none, default iam). AWS SDK + signer are lazy-imported so non-MSK runs don't load them.
-- **confluent**: `CONFLUENT_BOOTSTRAP_SERVERS` + `CONFLUENT_API_KEY` + `CONFLUENT_API_SECRET`.
+All providers share `KAFKA_PROVIDER`, `KAFKA_CLIENT_ID`, and `KAFKA_BROKERS` (CSV → `string[]`). Per-provider extras:
+
+- **local**: nothing else needed. `KAFKA_BROKERS` defaults to `localhost:9092`.
+- **msk**: `MSK_REGION` is required; `MSK_AUTH_MODE` defaults to iam. `KAFKA_BROKERS` is optional when `MSK_CLUSTER_ARN` is set (brokers discovered via `GetBootstrapBrokersCommand`). AWS SDK + signer are lazy-imported so non-MSK runs don't load them.
+- **confluent**: `KAFKA_BROKERS` + `CONFLUENT_API_KEY` + `CONFLUENT_API_SECRET`.
 
 Portable pattern lives at `guides/kafka-provider-factory.md`. Project-specific application at `docs/architecture/kafka-provider-factory.md`.
 
@@ -136,7 +138,7 @@ When the JSON body looks AutoOps-shaped, the helper computes `sha256(resourceId 
 ```
 config.app.{name, version, environment}
 config.server.{port}
-config.kafka.{provider, clientId, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
+config.kafka.{provider, clientId, brokers, msk:{region, clusterArn, authMode}, confluent:{apiKey, apiSecret}}
 config.observability.{logLevel}
 config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
 config.routes[].{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempotency?}
@@ -145,8 +147,9 @@ config.routes[].{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempot
 - `src/config/defaults.ts` — every key has a default; `version` comes from `package.json`. Default provider is `local`.
 - `src/config/envMapping.ts` — explicit env-var → field mapping; returns deep-partial overrides.
 - `src/config/schemas.ts` — Zod v4 `strictObject` + `.superRefine()` cross-field rules:
-  - `provider=msk` requires `msk.region` AND (`msk.clusterArn` OR `msk.brokers`).
-  - `provider=confluent` requires `confluent.bootstrapServers` + `apiKey` + `apiSecret`.
+  - `provider=msk` requires `msk.region` AND (`kafka.brokers` non-empty OR `msk.clusterArn`).
+  - `provider=confluent` requires `kafka.brokers` non-empty + `apiKey` + `apiSecret`.
+  - `provider=local` requires `kafka.brokers` non-empty (default `["localhost:9092"]`).
   - `app.environment=prod` forbids `provider=local`.
 - `src/config/loader.ts` — merge defaults + env, validate via `.safeParse()`, lazy Proxy singleton with `resetConfigCache()` for tests.
 

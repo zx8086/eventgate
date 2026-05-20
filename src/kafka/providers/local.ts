@@ -6,14 +6,14 @@ export class LocalKafkaProvider implements KafkaProvider {
   readonly name = "Local Kafka";
 
   constructor(
-    private readonly bootstrapServers: string[],
+    private readonly bootstrapBrokers: string[],
     private readonly clientId: string,
   ) {}
 
   async getConnectionConfig(): Promise<KafkaConnectionConfig> {
     return {
       clientId: this.clientId,
-      bootstrapBrokers: this.bootstrapServers,
+      bootstrapBrokers: this.bootstrapBrokers,
     };
   }
 

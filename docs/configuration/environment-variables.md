@@ -31,37 +31,32 @@ Comma-separated lists are trimmed and empty entries are dropped.
 
 ## Kafka (all providers)
 
+Three env vars are required for every provider (with one MSK exception called out below):
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KAFKA_PROVIDER` | `local` | One of `local`, `msk`, `confluent`. See [../architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md). |
 | `KAFKA_CLIENT_ID` | `eventgate-gateway` | Client id for the producer. |
+| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated bootstrap brokers. Required for `local` and `confluent`; for `msk`, may be omitted when `MSK_CLUSTER_ARN` is set (brokers discovered at startup). |
 
 Topic names are declared per route in `config.routes[]` (see the Routes section below), not at the kafka block.
 
-## Local provider
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `KAFKA_LOCAL_BOOTSTRAP_SERVERS` | `localhost:9092` | Comma-separated bootstrap brokers. |
-
-## AWS MSK provider
+## AWS MSK provider extras
 
 Required when `KAFKA_PROVIDER=msk`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MSK_REGION` | (unset) | AWS region of the cluster. Required. |
-| `MSK_CLUSTER_ARN` | (unset) | Cluster ARN. Brokers are discovered via `GetBootstrapBrokersCommand`. One of `MSK_CLUSTER_ARN` / `MSK_BROKERS` required. |
-| `MSK_BROKERS` | (unset) | CSV bootstrap brokers. Skips discovery. One of `MSK_CLUSTER_ARN` / `MSK_BROKERS` required. |
+| `MSK_CLUSTER_ARN` | (unset) | Cluster ARN. When `KAFKA_BROKERS` is empty, brokers are discovered via `GetBootstrapBrokersCommand`. Either this or `KAFKA_BROKERS` must be set. |
 | `MSK_AUTH_MODE` | `iam` | `iam` (SASL/OAUTHBEARER + TLS) \| `tls` (TLS only) \| `none` (PLAINTEXT). |
 
-## Confluent Cloud provider
+## Confluent Cloud provider extras
 
-Required when `KAFKA_PROVIDER=confluent`.
+Required when `KAFKA_PROVIDER=confluent` (set the bootstrap servers via `KAFKA_BROKERS`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CONFLUENT_BOOTSTRAP_SERVERS` | (unset) | Bootstrap servers (host:port[,host:port]). |
 | `CONFLUENT_API_KEY` | (unset) | SASL/PLAIN username. |
 | `CONFLUENT_API_SECRET` | (unset) | SASL/PLAIN password. |
 
@@ -107,7 +102,7 @@ When `ENVIRONMENT=prod`, `src/config/schemas.ts` runs additional checks via `.su
 | Rule | Reason |
 |------|--------|
 | `KAFKA_PROVIDER` must not be `local` | Prevents accidentally pointing at developer-laptop brokers in prod |
-| `msk` requires `MSK_REGION` plus `MSK_CLUSTER_ARN` or `MSK_BROKERS` | Catches half-configured MSK env early at startup |
+| `msk` requires `MSK_REGION` plus `MSK_CLUSTER_ARN` or `KAFKA_BROKERS` | Catches half-configured MSK env early at startup |
 | `confluent` requires the full triplet | Catches missing API credentials early at startup |
 
 Manually probe the refinements:
@@ -149,3 +144,4 @@ LOG_LEVEL=debug
 | 2026-05-19 | Clarified that `KAFKA_TOPIC_EVENTS` / `KAFKA_TOPIC_DLQ` are reserved for future consumer services and not written by the gateway (SIO-801) |
 | 2026-05-20 | Removed unused `TENANT` env var; nothing in `src/` ever read `config.app.tenant` (SIO-808) |
 | 2026-05-20 | Removed legacy `KAFKA_TOPIC_RAW|EVENTS|DLQ` env vars and the `kafka.topics.*` config block; per-route `topic` is the only source of truth. Also fixed the inline-publish (`OUTBOX_ENABLED=false`) path so it publishes to `route.topic` instead of the dropped legacy topic (SIO-809). |
+| 2026-05-20 | Unified broker config: `KAFKA_LOCAL_BOOTSTRAP_SERVERS`, `MSK_BROKERS`, and `CONFLUENT_BOOTSTRAP_SERVERS` collapsed into a single top-level `KAFKA_BROKERS` (CSV → `string[]`). MSK keeps `MSK_CLUSTER_ARN` for runtime discovery (SIO-811). |

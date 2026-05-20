@@ -24,7 +24,7 @@ describe("createKafkaProvider dispatch", () => {
   it("returns ConfluentKafkaProvider for provider=confluent", () => {
     const cfg = buildConfig({
       KAFKA_PROVIDER: "confluent",
-      CONFLUENT_BOOTSTRAP_SERVERS: "pkc-1:9092",
+      KAFKA_BROKERS: "pkc-1:9092",
       CONFLUENT_API_KEY: "k",
       CONFLUENT_API_SECRET: "s",
     });
@@ -37,7 +37,7 @@ describe("createKafkaProvider dispatch", () => {
     const cfg = buildConfig({
       KAFKA_PROVIDER: "msk",
       MSK_REGION: "eu-central-1",
-      MSK_BROKERS: "b-1:9098",
+      KAFKA_BROKERS: "b-1:9098",
       MSK_AUTH_MODE: "iam",
     });
     const provider = createKafkaProvider(cfg, { MSK_AUTH_MODE: "iam" });
@@ -68,7 +68,7 @@ describe("LocalKafkaProvider connection config", () => {
   afterEach(() => resetConfigCache());
 
   it("returns plain bootstrap brokers with no sasl/tls", async () => {
-    const cfg = buildConfig({ KAFKA_LOCAL_BOOTSTRAP_SERVERS: "host1:9092,host2:9092" });
+    const cfg = buildConfig({ KAFKA_BROKERS: "host1:9092,host2:9092" });
     const provider = createKafkaProvider(cfg);
     const conn = await provider.getConnectionConfig();
     expect(conn.bootstrapBrokers).toEqual(["host1:9092", "host2:9092"]);
@@ -84,7 +84,7 @@ describe("ConfluentKafkaProvider connection config", () => {
   it("returns SASL/PLAIN + TLS for confluent", async () => {
     const cfg = buildConfig({
       KAFKA_PROVIDER: "confluent",
-      CONFLUENT_BOOTSTRAP_SERVERS: "pkc-1:9092,pkc-2:9092",
+      KAFKA_BROKERS: "pkc-1:9092,pkc-2:9092",
       CONFLUENT_API_KEY: "k",
       CONFLUENT_API_SECRET: "s",
     });

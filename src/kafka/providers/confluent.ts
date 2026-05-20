@@ -6,7 +6,7 @@ export class ConfluentKafkaProvider implements KafkaProvider {
   readonly name = "Confluent Cloud";
 
   constructor(
-    private readonly bootstrapServers: string,
+    private readonly bootstrapBrokers: string[],
     private readonly apiKey: string,
     private readonly apiSecret: string,
     private readonly clientId: string,
@@ -15,7 +15,7 @@ export class ConfluentKafkaProvider implements KafkaProvider {
   async getConnectionConfig(): Promise<KafkaConnectionConfig> {
     return {
       clientId: this.clientId,
-      bootstrapBrokers: this.bootstrapServers.split(",").map((s) => s.trim()).filter(Boolean),
+      bootstrapBrokers: this.bootstrapBrokers,
       sasl: {
         mechanism: "PLAIN",
         username: this.apiKey,

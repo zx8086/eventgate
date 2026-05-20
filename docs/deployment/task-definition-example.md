@@ -91,6 +91,7 @@ Key points:
 - `stopTimeout: 120` (seconds) gives the outbox drainer time to flush in-flight batches and `closeOutbox()` to checkpoint WAL on SIGTERM. Default 30s is too short for a drained shutdown.
 - `healthCheck` uses `curl` against `/healthz` — the image already includes curl in both Tier 1 and Tier 2 variants per [container-image.md](container-image.md).
 - `ROUTES_JSON` is a single escaped JSON string on one line; multi-line examples in [aws-ecs.md](aws-ecs.md) collapse to this form in raw JSON. CloudFormation and Terraform variants below avoid the manual escaping.
+- `KAFKA_BROKERS` is omitted in this MSK example. With `MSK_CLUSTER_ARN` set, the provider calls `GetBootstrapBrokersCommand` at startup and resolves brokers automatically. To skip discovery (e.g. for stable broker pinning), set `KAFKA_BROKERS=b-1.foo.kafka-serverless.eu-central-1.amazonaws.com:9098,b-2...:9098` and the discovery call is bypassed.
 
 ## Multi-vendor `ROUTES_JSON`
 
@@ -114,7 +115,7 @@ Drop the MSK env block; add Confluent. Credentials come from Secrets Manager rat
   { "name": "LOG_LEVEL",                    "value": "info" },
   { "name": "KAFKA_PROVIDER",               "value": "confluent" },
   { "name": "KAFKA_CLIENT_ID",              "value": "eventgate-gateway" },
-  { "name": "CONFLUENT_BOOTSTRAP_SERVERS",  "value": "pkc-xxxxx.eu-central-1.aws.confluent.cloud:9092" },
+  { "name": "KAFKA_BROKERS",                "value": "pkc-xxxxx.eu-central-1.aws.confluent.cloud:9092" },
   { "name": "OUTBOX_DB_PATH",               "value": "/data/outbox.db" },
   { "name": "ROUTES_JSON",                  "value": "[...]" }
 ],

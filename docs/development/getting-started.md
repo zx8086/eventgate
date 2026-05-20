@@ -127,7 +127,7 @@ docker compose down
 | `bun run dev:gateway` exits immediately with a Zod error | An env var is invalid or the production refinements tripped | Read the error path; usually `KAFKA_PROVIDER` is set without the matching provider-specific vars, or `ENVIRONMENT=prod` is set accidentally |
 | `/healthz` returns `503` | Producer not connected | Confirm Redpanda is healthy: `docker compose ps` and `docker logs eventgate-redpanda` |
 | `404` from the gateway | Wrong path | The only routes are `POST /webhooks/elastic/autoops` and `GET /healthz` |
-| Gateway logs `kafka publish failed` repeatedly | Brokers unreachable | Check `KAFKA_LOCAL_BOOTSTRAP_SERVERS` matches the Redpanda advertised listener |
+| Gateway logs `kafka publish failed` repeatedly | Brokers unreachable | Check `KAFKA_BROKERS` matches the Redpanda advertised listener |
 
 ## See Also
 

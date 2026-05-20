@@ -13,17 +13,13 @@ export const defaults = {
   kafka: {
     provider: "local" as const,
     clientId: "eventgate-gateway",
-    local: {
-      bootstrapServers: ["localhost:9092"],
-    },
+    brokers: ["localhost:9092"],
     msk: {
       region: "",
       clusterArn: "",
-      brokers: "",
       authMode: "iam" as const,
     },
     confluent: {
-      bootstrapServers: "",
       apiKey: "",
       apiSecret: "",
     },
