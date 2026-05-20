@@ -22,6 +22,11 @@ export type EnvOverrides = {
     busyPollMs?: number;
     backlogWarnThreshold?: number;
   };
+  health?: {
+    probeIntervalMs?: number;
+    probeTimeoutMs?: number;
+    heartbeatMs?: number;
+  };
   admin?: { token?: string };
   routesFile?: string;
   routes?: unknown[];
@@ -118,6 +123,11 @@ export function mapEnv(env: RawEnv): EnvOverrides {
       idlePollMs: num(env.OUTBOX_IDLE_POLL_MS),
       busyPollMs: num(env.OUTBOX_BUSY_POLL_MS),
       backlogWarnThreshold: num(env.OUTBOX_BACKLOG_WARN),
+    }),
+    health: filterUndefined({
+      probeIntervalMs: num(env.HEALTH_PROBE_INTERVAL_MS),
+      probeTimeoutMs: num(env.HEALTH_PROBE_TIMEOUT_MS),
+      heartbeatMs: num(env.STATS_HEARTBEAT_MS),
     }),
   };
 
