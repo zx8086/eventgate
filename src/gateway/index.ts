@@ -2,6 +2,8 @@
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { config } from "../config/index.ts";
+import { resetConfigCache } from "../config/loader.ts";
+import type { RouteConfig } from "../config/schemas.ts";
 import { getLogger } from "../logging/index.ts";
 import { createProducer } from "../kafka/producer.ts";
 import { createKafkaProvider } from "../kafka/providers/index.ts";
@@ -47,9 +49,43 @@ if (config.outbox.enabled) {
   log.warn("outbox disabled; inline publish (escape hatch)");
 }
 
-const server = Bun.serve({
+let server: ReturnType<typeof Bun.serve> | undefined;
+
+function rebuildRoutes(newRoutes?: RouteConfig[]): ReturnType<typeof buildRoutes> {
+  if (newRoutes !== undefined) {
+    process.env.ROUTES_JSON = JSON.stringify(newRoutes);
+    resetConfigCache();
+  }
+  const adminContext = config.admin?.token && config.routesFile
+    ? {
+        routesFilePath: config.routesFile,
+        onReload: async (routes: RouteConfig[]) => {
+          const map = rebuildRoutes(routes);
+          if (!server) throw new Error("server not initialized");
+          server.reload({ routes: map });
+        },
+      }
+    : undefined;
+  return buildRoutes({
+    producer,
+    outbox: outboxWriter,
+    adminContext,
+  });
+}
+
+if (config.admin?.token) {
+  if (config.routesFile) {
+    log.info({ routesFilePath: config.routesFile }, "admin endpoint will be enabled");
+  } else {
+    log.warn("ADMIN_TOKEN set but ROUTES_FILE unset; admin endpoint disabled (cannot persist)");
+  }
+} else {
+  log.info("admin endpoint disabled (ADMIN_TOKEN unset)");
+}
+
+server = Bun.serve({
   port: config.server.port,
-  routes: buildRoutes({ producer, outbox: outboxWriter }),
+  routes: rebuildRoutes(),
   fetch(req: Request) {
     const url = new URL(req.url);
     log.warn(
@@ -75,7 +111,7 @@ log.info(
 
 async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
-  server.stop();
+  server?.stop();
   if (drainer) await drainer.stop();
   await producer.disconnect();
   await provider.close();
