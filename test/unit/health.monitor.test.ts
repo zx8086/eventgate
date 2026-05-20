@@ -132,6 +132,31 @@ describe("HealthMonitor", () => {
     await monitor.stop();
   });
 
+  it("reports degraded (not unhealthy) when only the kafkaBroker probe fails", async () => {
+    // SIO-816: against Redpanda the @platformatic/kafka Admin.listTopics()
+    // probe can fail while the producer's Produce API works fine. The broker
+    // probe is informational, not load-bearing — its failure must NOT take
+    // the gateway out of ALB rotation. `snap.ok` stays true (HTTP 200) and
+    // the status is surfaced as "degraded".
+    const monitor = createHealthMonitor({
+      producer: fakeProducer(true),
+      outboxDb: db,
+      admin: fakeAdmin(async () => {
+        throw new Error("redpanda admin path not implemented");
+      }),
+      expectedTopics: ["T_A"],
+      probeIntervalMs: 10_000,
+      probeTimeoutMs: 1_000,
+    });
+    await monitor.start();
+    const snap = monitor.snapshot();
+    expect(snap.status).toBe("degraded");
+    expect(snap.ok).toBe(true);
+    expect(snap.dependencies.kafkaBroker?.ok).toBe(false);
+    expect(snap.dependencies.kafkaProducer?.ok).toBe(true);
+    await monitor.stop();
+  });
+
   it("reports healthy when outboxDb is intentionally absent (OUTBOX_ENABLED=false)", async () => {
     const monitor = createHealthMonitor({
       producer: fakeProducer(true),
