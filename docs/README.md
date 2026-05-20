@@ -1,10 +1,10 @@
 # eventgate Documentation
 
 > **Targets:** Bun 1.3.11+ | TypeScript 5.x
-> **Last updated:** 2026-05-19
+> **Last updated:** 2026-05-20
 > **Conventions:** See [../guides/documentation-guide.md](../guides/documentation-guide.md)
 
-Project-specific documentation for eventgate, a single-process Bun ingestion service for Elastic AutoOps webhooks. HTTP in, Kafka out. Use this index to find architecture, configuration, deployment, development, operations, security, and API references. Portable, project-agnostic patterns live in [`../guides/`](../guides/).
+Project-specific documentation for eventgate, a single-process Bun ingestion service for webhook sources (Elastic AutoOps and any other vendor declared in `config.routes[]`). HTTP in, Kafka out. Use this index to find architecture, configuration, deployment, development, operations, security, and API references. Portable, project-agnostic patterns live in [`../guides/`](../guides/).
 
 ## Quick Navigation
 
@@ -12,6 +12,7 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 |------------|----------|
 | Run the service locally | [development/getting-started.md](development/getting-started.md) |
 | Understand the gateway architecture | [architecture/overview.md](architecture/overview.md) |
+| Trace a webhook or admin request end-to-end | [architecture/request-flows.md](architecture/request-flows.md) |
 | Switch Kafka backend (local / MSK / Confluent) | [architecture/kafka-provider-factory.md](architecture/kafka-provider-factory.md) |
 | Understand the SQLite outbox / Kafka durability | [architecture/outbox.md](architecture/outbox.md) |
 | Look up an environment variable | [configuration/environment-variables.md](configuration/environment-variables.md) |
@@ -30,7 +31,8 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 
 | Document | Description |
 |----------|-------------|
-| [overview.md](architecture/overview.md) | Gateway architecture, Kafka topics, accept-everything contract |
+| [overview.md](architecture/overview.md) | System diagram, layers, topic naming policy, reserved paths, admin endpoint |
+| [request-flows.md](architecture/request-flows.md) | Sequence diagrams: webhook ingest, drainer loop, admin reload |
 | [kafka-provider-factory.md](architecture/kafka-provider-factory.md) | Provider abstraction for local / MSK / Confluent backends |
 | [outbox.md](architecture/outbox.md) | SQLite outbox + drainer for durability against Kafka outages |
 
@@ -95,9 +97,10 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 
 ### Key Capabilities
 
-- Receives Elastic AutoOps webhook notifications over HTTP.
-- Accepts any valid JSON body — non-JSON bodies return 400, everything else returns 202. No Zod validation or normalization at the gateway.
-- Writes one row per request to `ops.elastic.autoops.raw.v1` via the SQLite outbox for replay; an opportunistic `idempotencyKey` is attached as a Kafka header when it can be derived from the body.
+- Receives JSON webhooks over HTTP on every path declared in `config.routes[]`. Multi-source today (Elastic AutoOps shipped; new vendors are config-only).
+- Accepts any valid JSON body — non-JSON bodies return 400, everything else returns 202. No Zod validation or normalization at the gateway (webhook bodies are accepted as-is; config IS Zod-validated).
+- Writes one row per request to the route's `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>` topic via the SQLite outbox for replay; an opportunistic `idempotencyKey` is attached as a Kafka header when the route's idempotency strategy applies.
+- Optional `PUT /admin/routes` admin endpoint (token-protected, hot-reload via `server.reload`, persisted to `ROUTES_FILE`) for runtime route changes without redeploy.
 - Connects to local Redpanda, AWS MSK, or Confluent Cloud via a provider factory — selected entirely by environment variables.
 
 ### Technology Stack
@@ -116,11 +119,14 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 
 ### Topics
 
-| Resource | Purpose |
-|----------|---------|
-| `ops.elastic.autoops.raw.v1` | Verbatim webhook body for replay — the only topic the gateway writes to |
-| `ops.elastic.autoops.events.v1` | Reserved for future normalization consumers; gateway does not publish here |
-| `ops.elastic.autoops.dlq.v1` | Reserved for future downstream consumers; gateway does not publish here |
+Topics are declared per route in `config.routes[]` and validated at startup against the org-wide naming policy. The gateway is the source connector in that taxonomy.
+
+| Pattern | Use | Example |
+|---|---|---|
+| `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>` | Gateway-owned. Verbatim webhook body. | `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS` |
+| `DLQ_T_<topic>` | Optional companion DLQ name. Declared on the route; gateway never publishes here. | `DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS` |
+
+Forbidden as gateway topics (each rejected at startup with a distinct message): `T_PUBLIC_*`, `T_PRIVATE_SINK_*`, `T_PRIVATE_*_RICH_NOTIFICATIONS`, `T_PRIVATE_*_EVENTS`, `DLQ_T_*` (as the primary topic), and Kafka/Confluent system prefixes. See [architecture/overview.md](architecture/overview.md) for the full policy.
 
 ---
 
@@ -131,3 +137,4 @@ Project-specific documentation for eventgate, a single-process Bun ingestion ser
 | 2026-05-19 | Initial documentation index created |
 | 2026-05-19 | Refactored to gateway-only architecture with Kafka provider factory (SIO-795) |
 | 2026-05-19 | Added SQLite outbox for gateway durability against Kafka outages (SIO-799) |
+| 2026-05-20 | Updated for multi-route config + admin endpoint + topic naming policy + request-flows companion doc (SIO-802, SIO-803, SIO-804) |
