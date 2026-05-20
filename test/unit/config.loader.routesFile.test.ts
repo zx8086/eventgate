@@ -23,7 +23,10 @@ const fileRoute = [
     name: "file-route",
     path: "/webhooks/file",
     topic: "T_PRIVATE_SOURCE_FILE_X",
+    dlqTopic: "DLQ_T_PRIVATE_SOURCE_FILE_X",
+    sourceHeader: "file-route",
     keyFields: ["id"],
+    idempotency: "elastic-autoops",
   },
 ];
 
@@ -32,7 +35,10 @@ const envRoute = [
     name: "env-route",
     path: "/webhooks/env",
     topic: "T_PRIVATE_SOURCE_ENV_X",
+    dlqTopic: "DLQ_T_PRIVATE_SOURCE_ENV_X",
+    sourceHeader: "env-route",
     keyFields: ["id"],
+    idempotency: "elastic-autoops",
   },
 ];
 

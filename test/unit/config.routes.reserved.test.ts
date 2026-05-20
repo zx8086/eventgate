@@ -6,7 +6,10 @@ const base: RouteConfig = {
   name: "x",
   path: "/webhooks/x",
   topic: "T_PRIVATE_SOURCE_X_Y",
+  dlqTopic: "DLQ_T_PRIVATE_SOURCE_X_Y",
+  sourceHeader: "x",
   keyFields: ["id"],
+  idempotency: "elastic-autoops",
 };
 
 describe("routesSchema rejects reserved paths", () => {

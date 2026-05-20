@@ -22,7 +22,7 @@ const confluentSchema = z.strictObject({
 });
 
 const routeSchema = z.strictObject({
-  name: z.string().min(1).describe("Human-readable route id; used for logs and as default sourceHeader."),
+  name: z.string().min(1).describe("Human-readable route id; used in logs and as the source Kafka header value."),
   path: z
     .string()
     .min(2)
@@ -35,13 +35,11 @@ const routeSchema = z.strictObject({
   dlqTopic: z
     .string()
     .min(1)
-    .optional()
-    .describe("Optional companion DLQ name. If set, must equal DLQ_T_<topic>. Gateway never writes here."),
+    .describe("Companion DLQ name. Must equal DLQ_T_<topic>. Declared so downstream consumers know where retries land; gateway never writes here."),
   sourceHeader: z
     .string()
     .min(1)
-    .optional()
-    .describe("Override for the 'source' Kafka header. Defaults to name."),
+    .describe("Value for the 'source' Kafka header attached to every message. Typically matches name."),
   keyFields: z
     .array(z.string().min(1))
     .min(1)
@@ -49,8 +47,7 @@ const routeSchema = z.strictObject({
   idempotency: z
     .string()
     .min(1)
-    .optional()
-    .describe("Named strategy from idempotencyStrategies registry. Optional."),
+    .describe("Named strategy from the idempotencyStrategies registry. Used to derive the idempotencyKey Kafka header for downstream dedup."),
 });
 
 export type RouteConfig = z.infer<typeof routeSchema>;
@@ -82,25 +79,23 @@ export const routesSchema = z
         });
       }
 
-      if (r.dlqTopic !== undefined) {
-        const expected = expectedDlqTopic(r.topic);
-        if (r.dlqTopic !== expected) {
-          ctx.addIssue({
-            code: "custom",
-            path: [i, "dlqTopic"],
-            message: `dlqTopic must be '${expected}'; got '${r.dlqTopic}'`,
-          });
-        }
-        if (r.dlqTopic.length > 249) {
-          ctx.addIssue({
-            code: "custom",
-            path: [i, "dlqTopic"],
-            message: `dlqTopic length ${r.dlqTopic.length} exceeds Kafka limit of 249`,
-          });
-        }
+      const expected = expectedDlqTopic(r.topic);
+      if (r.dlqTopic !== expected) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "dlqTopic"],
+          message: `dlqTopic must be '${expected}'; got '${r.dlqTopic}'`,
+        });
+      }
+      if (r.dlqTopic.length > 249) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "dlqTopic"],
+          message: `dlqTopic length ${r.dlqTopic.length} exceeds Kafka limit of 249`,
+        });
       }
 
-      if (r.idempotency !== undefined && !knownIdempotencyStrategy(r.idempotency)) {
+      if (!knownIdempotencyStrategy(r.idempotency)) {
         ctx.addIssue({
           code: "custom",
           path: [i, "idempotency"],
@@ -130,17 +125,15 @@ export const routesSchema = z
         topicSeen.set(r.topic, i);
       }
 
-      if (r.dlqTopic !== undefined) {
-        const prevDlq = dlqSeen.get(r.dlqTopic);
-        if (prevDlq !== undefined) {
-          ctx.addIssue({
-            code: "custom",
-            path: [i, "dlqTopic"],
-            message: `duplicate dlqTopic '${r.dlqTopic}' (also at routes[${prevDlq}])`,
-          });
-        } else {
-          dlqSeen.set(r.dlqTopic, i);
-        }
+      const prevDlq = dlqSeen.get(r.dlqTopic);
+      if (prevDlq !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "dlqTopic"],
+          message: `duplicate dlqTopic '${r.dlqTopic}' (also at routes[${prevDlq}])`,
+        });
+      } else {
+        dlqSeen.set(r.dlqTopic, i);
       }
     });
   });

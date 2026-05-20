@@ -43,6 +43,7 @@ export const defaults = {
       path: "/webhooks/elastic/autoops",
       topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
       dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      sourceHeader: "elastic-autoops",
       keyFields: ["resourceId", "deployment-id"],
       idempotency: "elastic-autoops",
     },

@@ -74,7 +74,7 @@ The set of webhook routes (path → topic mapping, partition-key fields, idempot
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ROUTES_JSON` | (unset) | JSON-encoded array of route objects. Each entry: `{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempotency?}`. Replaces (does not merge with) the seed route when set. Malformed JSON falls back silently to defaults; a valid array that fails Zod validation crashes the task at startup. |
+| `ROUTES_JSON` | (unset) | JSON-encoded array of route objects. Each entry is `{name, path, topic, dlqTopic, sourceHeader, keyFields, idempotency}` — every field is mandatory. Replaces (does not merge with) the seed route when set. Malformed JSON falls back silently to defaults; a valid array that fails Zod validation crashes the task at startup. |
 | `ROUTES_FILE` | (unset) | Path to a JSON file containing the routes array. Read at startup; takes precedence over `ROUTES_JSON`. Required alongside `ADMIN_TOKEN` to enable the optional `PUT /admin/routes` runtime-mutation endpoint. **Not used in the Fargate deployment shape** — see [../deployment/task-definition-example.md](../deployment/task-definition-example.md). |
 | `ADMIN_TOKEN` | (unset) | Shared secret protecting `/admin/routes`. Min 32 characters. Endpoint is not registered when unset, or when set without `ROUTES_FILE` (in-memory-only mutation would be lost on restart). |
 
@@ -145,3 +145,4 @@ LOG_LEVEL=debug
 | 2026-05-20 | Removed unused `TENANT` env var; nothing in `src/` ever read `config.app.tenant` (SIO-808) |
 | 2026-05-20 | Removed legacy `KAFKA_TOPIC_RAW|EVENTS|DLQ` env vars and the `kafka.topics.*` config block; per-route `topic` is the only source of truth. Also fixed the inline-publish (`OUTBOX_ENABLED=false`) path so it publishes to `route.topic` instead of the dropped legacy topic (SIO-809). |
 | 2026-05-20 | Unified broker config: `KAFKA_LOCAL_BOOTSTRAP_SERVERS`, `MSK_BROKERS`, and `CONFLUENT_BOOTSTRAP_SERVERS` collapsed into a single top-level `KAFKA_BROKERS` (CSV → `string[]`). MSK keeps `MSK_CLUSTER_ARN` for runtime discovery (SIO-811). |
+| 2026-05-20 | All route fields are now mandatory: `dlqTopic`, `sourceHeader`, and `idempotency` joined `name`, `path`, `topic`, `keyFields` as required. Operator-supplied `ROUTES_JSON` payloads missing any field now fail Zod at startup with a clear path-pointing error. Seed route in `defaults.ts` updated (SIO-810). |

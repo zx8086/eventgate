@@ -84,7 +84,7 @@ Topics are declared per route in `config.routes[]` and validated at startup
 against the org-wide naming policy.
 
 - **Gateway-owned** (only this prefix is legal): `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>`. The Elastic AutoOps seed route uses `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS`.
-- **Optional companion DLQ**: `DLQ_T_<topic>`. Declared on the route via `dlqTopic` so downstream consumers can introspect it; the gateway itself never publishes here.
+- **Companion DLQ** (mandatory): `DLQ_T_<topic>`. Declared on the route via `dlqTopic` so downstream consumers can introspect it; the gateway itself never publishes here.
 - **Forbidden**: `T_PUBLIC_*`, `T_PRIVATE_SINK_*`, `T_PRIVATE_*_RICH_NOTIFICATIONS`, `T_PRIVATE_*_EVENTS`, `DLQ_T_*` (as the primary topic), and Kafka/Confluent system prefixes. Each is rejected at config-validation time with a distinct error message.
 
 Adding a route: edit `defaults.ts` (PR) or set `ROUTES_JSON` (env). No
@@ -141,7 +141,7 @@ config.server.{port}
 config.kafka.{provider, clientId, brokers, msk:{region, clusterArn, authMode}, confluent:{apiKey, apiSecret}}
 config.observability.{logLevel}
 config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
-config.routes[].{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempotency?}
+config.routes[].{name, path, topic, dlqTopic, sourceHeader, keyFields, idempotency}
 ```
 
 - `src/config/defaults.ts` — every key has a default; `version` comes from `package.json`. Default provider is `local`.

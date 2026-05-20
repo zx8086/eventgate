@@ -113,11 +113,9 @@ LOG_LEVEL=info
 
 Per-variable detail and refinements live in [../configuration/environment-variables.md](../configuration/environment-variables.md). `ENVIRONMENT=prod` triggers the `.superRefine()` block in `src/config/schemas.ts` — `KAFKA_PROVIDER=local` is rejected, MSK requires region + brokers-or-arn, Confluent requires the full triplet.
 
-## Routes — single or multiple vendors
+## Routes
 
-Routes are baked into the task definition via `ROUTES_JSON`. Each entry pairs an HTTP path with its destination Kafka topic and partition-key strategy. The gateway listens on every declared path and publishes to that route's `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>` topic. To onboard a new vendor: append an object to the array and deploy a new task definition revision. Route changes are deliberately **deploy-time only** on Fargate — the admin endpoint (`PUT /admin/routes` + `ROUTES_FILE`) is not used in this deployment shape because routes change rarely (~once a quarter) and the simpler single-mount setup is worth the brief gap of a rolling deploy.
-
-Single vendor (Elastic AutoOps only):
+Routes are baked into the task definition via `ROUTES_JSON`. Each entry pairs an HTTP path with its destination Kafka topic, DLQ topic, source header, partition-key fields, and idempotency strategy — **every field is mandatory**. The gateway listens on every declared path and publishes to that route's `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>` topic. Route changes are deliberately **deploy-time only** on Fargate — the admin endpoint (`PUT /admin/routes` + `ROUTES_FILE`) is not used in this deployment shape because routes change rarely (~once a quarter) and the simpler single-mount setup is worth the brief gap of a rolling deploy.
 
 ```json
 ROUTES_JSON=[
@@ -126,42 +124,16 @@ ROUTES_JSON=[
     "path": "/webhooks/elastic/autoops",
     "topic": "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
     "dlqTopic": "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    "sourceHeader": "elastic-autoops",
     "keyFields": ["resourceId", "deployment-id"],
     "idempotency": "elastic-autoops"
   }
 ]
 ```
 
-Multiple vendors (Elastic + Datadog + GitHub):
+The route schema (in `src/config/schemas.ts`) enforces every contract at startup: `topic` must match `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>`, `dlqTopic` must equal `DLQ_T_<topic>`, `path` must not collide with reserved paths (`/healthz`, `/admin/routes`) or other routes, `idempotency` must reference a registered strategy (only `elastic-autoops` ships today — see `src/gateway/idempotencyStrategies.ts`). Malformed `ROUTES_JSON` crashes the task on boot; ECS rolls back automatically.
 
-```json
-ROUTES_JSON=[
-  {
-    "name": "elastic-autoops",
-    "path": "/webhooks/elastic/autoops",
-    "topic": "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
-    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
-    "keyFields": ["resourceId", "deployment-id"],
-    "idempotency": "elastic-autoops"
-  },
-  {
-    "name": "datadog-alerts",
-    "path": "/webhooks/datadog/alerts",
-    "topic": "T_PRIVATE_SOURCE_DATADOG_ALERTS",
-    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
-    "keyFields": ["alert_id"]
-  },
-  {
-    "name": "github-webhooks",
-    "path": "/webhooks/github/events",
-    "topic": "T_PRIVATE_SOURCE_GITHUB_EVENTS",
-    "dlqTopic": "DLQ_T_PRIVATE_SOURCE_GITHUB_EVENTS",
-    "keyFields": ["repository.full_name", "delivery"]
-  }
-]
-```
-
-The route schema (in `src/config/schemas.ts`) enforces every contract at startup: `topic` must match `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>`, `dlqTopic` (when present) must equal `DLQ_T_<topic>`, `path` must not collide with reserved paths (`/healthz`, `/admin/routes`) or other routes, `idempotency` must reference a registered strategy. Malformed `ROUTES_JSON` crashes the task on boot — ECS rolls back automatically.
+**Adding a new vendor (e.g. Datadog, GitHub webhooks):** appending a route requires a registered idempotency strategy for that source. The current registry only contains `elastic-autoops`; onboarding a new vendor is a code change (add the strategy function + register it in `idempotencyStrategies.ts`) followed by a config change (append the route to `ROUTES_JSON` with the new `idempotency` name). Don't show multi-vendor `ROUTES_JSON` in docs until the matching strategies exist — Zod will reject the unknown name at boot.
 
 A copy-pasteable task definition that ties this together with the EBS volume mount, IAM, log driver, and healthcheck lives in [task-definition-example.md](task-definition-example.md).
 

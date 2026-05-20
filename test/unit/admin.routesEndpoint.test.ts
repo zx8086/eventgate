@@ -22,7 +22,10 @@ const validRoutes = [
     name: "datadog",
     path: "/webhooks/datadog",
     topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS",
+    dlqTopic: "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
+    sourceHeader: "datadog",
     keyFields: ["alert_id"],
+    idempotency: "elastic-autoops",
   },
 ];
 

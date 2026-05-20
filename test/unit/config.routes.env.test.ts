@@ -30,7 +30,10 @@ describe("ROUTES_JSON override", () => {
         name: "datadog-alerts",
         path: "/webhooks/datadog/alerts",
         topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS",
+        dlqTopic: "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
+        sourceHeader: "datadog-alerts",
         keyFields: ["alert_id", "id"],
+        idempotency: "elastic-autoops",
       },
     ]);
     const cfg = buildConfig({ ...baseEnv, ROUTES_JSON });

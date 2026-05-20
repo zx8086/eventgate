@@ -31,6 +31,8 @@ beforeEach(() => {
         name: "elastic-autoops",
         path: "/webhooks/elastic/autoops",
         topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+        dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+        sourceHeader: "elastic-autoops",
         keyFields: ["resourceId"],
         idempotency: "elastic-autoops",
       },
@@ -38,7 +40,10 @@ beforeEach(() => {
         name: "datadog-alerts",
         path: "/webhooks/datadog/alerts",
         topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS",
+        dlqTopic: "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
+        sourceHeader: "datadog-alerts",
         keyFields: ["alert_id"],
+        idempotency: "elastic-autoops",
       },
     ]),
   };
@@ -103,8 +108,18 @@ describe("buildRoutes with multiple routes", () => {
     const res = healthz();
     const payload = await res.json() as { routes?: Array<{ name: string; path: string; topic: string; dlqTopic?: string }> };
     expect(payload.routes).toEqual([
-      { name: "elastic-autoops", path: "/webhooks/elastic/autoops", topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", dlqTopic: undefined },
-      { name: "datadog-alerts", path: "/webhooks/datadog/alerts", topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS", dlqTopic: undefined },
+      {
+        name: "elastic-autoops",
+        path: "/webhooks/elastic/autoops",
+        topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+        dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      },
+      {
+        name: "datadog-alerts",
+        path: "/webhooks/datadog/alerts",
+        topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS",
+        dlqTopic: "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
+      },
     ]);
   });
 });

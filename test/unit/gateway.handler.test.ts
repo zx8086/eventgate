@@ -23,6 +23,8 @@ const baseRoute: RouteConfig = {
   name: "elastic-autoops",
   path: "/webhooks/elastic/autoops",
   topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+  dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+  sourceHeader: "elastic-autoops",
   keyFields: ["resourceId", "deployment-id"],
   idempotency: "elastic-autoops",
 };
@@ -86,11 +88,12 @@ describe("makeWebhookHandler", () => {
     expect(outbox.calls[0]?.headers?.source).toBe("custom-source");
   });
 
-  it("omits idempotencyKey header when no strategy is configured", async () => {
-    const { idempotency: _omit, ...routeWithoutIdem } = baseRoute;
+  it("omits idempotencyKey header when the strategy returns undefined for this body shape", async () => {
+    // elastic-autoops strategy needs resourceId + title + status + startTime + endTime;
+    // a body missing any of those returns undefined and no header is set.
     const outbox = fakeOutbox();
-    const handler = makeWebhookHandler(routeWithoutIdem, { producer: noopProducer, outbox });
-    await handler(postJson({ resourceId: "dep-1", title: "t", status: "open" }));
+    const handler = makeWebhookHandler(baseRoute, { producer: noopProducer, outbox });
+    await handler(postJson({ resourceId: "dep-1" }));
     expect(outbox.calls[0]?.headers?.idempotencyKey).toBeUndefined();
   });
 
