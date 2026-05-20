@@ -17,7 +17,7 @@ export const defaults = {
     msk: {
       region: "",
       clusterArn: "",
-      authMode: "iam" as const,
+      authMode: "none" as const,
     },
     confluent: {
       apiKey: "",

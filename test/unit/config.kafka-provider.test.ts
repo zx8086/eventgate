@@ -28,6 +28,16 @@ describe("msk provider validation", () => {
       MSK_CLUSTER_ARN: "arn:aws:kafka:eu-central-1:123:cluster/x/u",
     });
     expect(cfg.kafka.provider).toBe("msk");
+    expect(cfg.kafka.msk.authMode).toBe("none");
+  });
+
+  it("honors explicit MSK_AUTH_MODE=iam", () => {
+    const cfg = buildConfig({
+      KAFKA_PROVIDER: "msk",
+      MSK_REGION: "eu-central-1",
+      MSK_CLUSTER_ARN: "arn:aws:kafka:eu-central-1:123:cluster/x/u",
+      MSK_AUTH_MODE: "iam",
+    });
     expect(cfg.kafka.msk.authMode).toBe("iam");
   });
 
