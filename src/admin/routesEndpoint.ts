@@ -12,7 +12,7 @@ const log = getLogger("admin.routesEndpoint");
 export type AdminRoutesDeps = {
   expectedToken: string;
   routesFilePath: string;
-  onReload: (routes: RouteConfig[]) => void;
+  onReload: (routes: RouteConfig[]) => void | Promise<void>;
 };
 
 export function makeAdminRoutesHandler(deps: AdminRoutesDeps) {
@@ -53,7 +53,7 @@ export function makeAdminRoutesHandler(deps: AdminRoutesDeps) {
     }
 
     try {
-      onReload(parsed.data);
+      await onReload(parsed.data);
     } catch (err) {
       log.error({ err }, "admin routes reload failed");
       return Response.json(

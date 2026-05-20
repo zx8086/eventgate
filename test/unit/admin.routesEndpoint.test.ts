@@ -128,4 +128,34 @@ describe("makeAdminRoutesHandler", () => {
     expect(res.status).toBe(500);
     expect(reload).not.toHaveBeenCalled();
   });
+
+  it("returns 500 with distinguishable message when onReload throws synchronously", async () => {
+    const handler = makeAdminRoutesHandler({
+      expectedToken: TOKEN,
+      routesFilePath,
+      onReload: () => {
+        throw new Error("reload boom");
+      },
+    });
+    const res = await handler(req(validRoutes, { "x-admin-token": TOKEN }));
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string; message: string };
+    expect(body.error).toBe("reload failed");
+    expect(body.message).toBe("routes persisted; restart will apply");
+  });
+
+  it("returns 500 when onReload rejects asynchronously", async () => {
+    const handler = makeAdminRoutesHandler({
+      expectedToken: TOKEN,
+      routesFilePath,
+      onReload: async () => {
+        throw new Error("async reload boom");
+      },
+    });
+    const res = await handler(req(validRoutes, { "x-admin-token": TOKEN }));
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string; message: string };
+    expect(body.error).toBe("reload failed");
+    expect(body.message).toBe("routes persisted; restart will apply");
+  });
 });
