@@ -10,10 +10,14 @@ eventgate is a single-process Bun ingestion service for Elastic AutoOps webhook 
 
 ## Contract
 
-Gateway accepts any valid JSON POST to `/webhooks/elastic/autoops` and writes
-it to `ops.elastic.autoops.raw.v1` via the SQLite outbox. Non-JSON bodies get
-400; everything else gets 202. The gateway does not validate AutoOps schema
-shape, does not normalize, does not write `events.v1` or `dlq.v1`. Downstream
+Gateway accepts any valid JSON POST to each configured route path and writes
+it to that route's Kafka topic via the SQLite outbox. The set of routes lives
+in `config.routes[]` (defaults in `src/config/defaults.ts`, overridable via
+`ROUTES_JSON`). Every route topic must follow the
+`T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>` naming policy; companion DLQs follow
+`DLQ_T_<topic>` but are never written by the gateway. Non-JSON bodies get 400;
+everything else gets 202. The gateway does not validate any webhook schema,
+does not normalize, does not write `events.v1` or `dlq.v1`. Downstream
 consumers in other services own those concerns.
 
 ## Current State
@@ -25,10 +29,13 @@ Single-package Bun project (no workspaces). Conforms to the team `guides/` for: 
 ```
 src/
   config/                 4-pillar config (defaults, envMapping, schemas, loader, index)
+    topicPolicy.ts        gateway topic naming policy (T_PRIVATE_SOURCE_*)
   gateway/                Bun.serve HTTP receiver
     index.ts              entry point — wires KafkaProvider + EventProducer + outbox
-    routes.ts             object-style routes (Bun 1.2+); accepts any valid JSON
+    routes.ts             iterates config.routes; one POST handler per route
+    handler.ts            makeWebhookHandler(route, deps) — per-request logic
     idempotencyKey.ts     opportunistic sha256 header for AutoOps-shaped bodies
+    idempotencyStrategies.ts  named registry of (body) => key functions
   kafka/
     producer.ts           EventProducer wrapping @platformatic/kafka Producer (publishRaw only)
     providers/
@@ -68,9 +75,16 @@ Add new downstream behavior (Slack, PagerDuty, aggregates, sinks into a database
 
 ### Kafka topics
 
-- `ops.elastic.autoops.raw.v1` — verbatim webhook body. The only topic the gateway writes. Opportunistic `idempotencyKey` header attached when the body looks AutoOps-shaped.
-- `ops.elastic.autoops.events.v1` — reserved for future consumer services that may publish normalized events. Not written by the gateway.
-- `ops.elastic.autoops.dlq.v1` — reserved for future consumer services that may quarantine bad messages. Not written by the gateway.
+Topics are declared per route in `config.routes[]` and validated at startup
+against the org-wide naming policy.
+
+- **Gateway-owned** (only this prefix is legal): `T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>`. The Elastic AutoOps seed route uses `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS`.
+- **Optional companion DLQ**: `DLQ_T_<topic>`. Declared on the route via `dlqTopic` so downstream consumers can introspect it; the gateway itself never publishes here.
+- **Forbidden**: `T_PUBLIC_*`, `T_PRIVATE_SINK_*`, `T_PRIVATE_*_RICH_NOTIFICATIONS`, `T_PRIVATE_*_EVENTS`, `DLQ_T_*` (as the primary topic), and Kafka/Confluent system prefixes. Each is rejected at config-validation time with a distinct error message.
+
+Adding a route: edit `defaults.ts` (PR) or set `ROUTES_JSON` (env). No
+TypeScript change unless the new source needs a custom idempotency strategy
+(`src/gateway/idempotencyStrategies.ts`).
 
 ### Kafka provider factory
 
@@ -107,6 +121,7 @@ config.server.{port}
 config.kafka.{provider, clientId, topics:{raw, events, dlq}, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
 config.observability.{logLevel}
 config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
+config.routes[].{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempotency?}
 ```
 
 - `src/config/defaults.ts` — every key has a default; `version` comes from `package.json`. Default provider is `local`.
@@ -197,6 +212,6 @@ ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments (non-obvious
 
 ## Out of scope (do not add without discussion)
 
-Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, OpenTelemetry instrumentation, Bun workspace catalogs (single-package repo), runtime provider switching (KAFKA_PROVIDER is read once at startup), connection pooling at the provider layer, CDC-style outbox draining (Debezium etc. — we are the publisher), multi-process outbox drainers (single-writer per file), a CLI for replaying `failed` outbox rows (defer until the first incident calls for it), Bun Worker threads for the drainer, exactly-once Kafka delivery (downstream consumers may dedupe on the opportunistic `idempotencyKey` header), AutoOps-body validation/normalization (downstream consumers own that).
+Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, OpenTelemetry instrumentation, Bun workspace catalogs (single-package repo), runtime provider switching (KAFKA_PROVIDER is read once at startup), connection pooling at the provider layer, CDC-style outbox draining (Debezium etc. — we are the publisher), multi-process outbox drainers (single-writer per file), a CLI for replaying `failed` outbox rows (defer until the first incident calls for it), Bun Worker threads for the drainer, exactly-once Kafka delivery (downstream consumers may dedupe on the opportunistic `idempotencyKey` header), AutoOps-body validation/normalization (downstream consumers own that), parametric paths (/webhooks/:vendor/:product), topic-name templates, hot reload of routes (server.reload()), per-route auth/validation/normalization/response shaping, a mounted ROUTES_FILE source.
 
 > Note: the outbox is **not** a "database integration in this repo" in the originally-deferred sense — that exclusion is about *downstream* domain storage. The outbox is a transport-layer durability buffer for the gateway itself.

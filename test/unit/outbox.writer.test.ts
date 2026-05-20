@@ -14,13 +14,13 @@ describe("createWriter.enqueue", () => {
   it("inserts a single pending row with the given fields", () => {
     const writer = createWriter(db);
     writer.enqueue({
-      topic: "raw",
+      topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
       messageKey: "deploy-1",
       payload: JSON.stringify({ a: 1 }),
       headers: { source: "elastic-autoops" },
     });
     const row = db.query("SELECT * FROM outbox").get() as Record<string, unknown>;
-    expect(row.topic).toBe("raw");
+    expect(row.topic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
     expect(row.message_key).toBe("deploy-1");
     expect(row.status).toBe("pending");
     expect(row.attempts).toBe(0);
@@ -31,7 +31,7 @@ describe("createWriter.enqueue", () => {
   it("stores headers as null when none provided", () => {
     const writer = createWriter(db);
     writer.enqueue({
-      topic: "raw",
+      topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
       messageKey: "k",
       payload: "{}",
       headers: null,
@@ -40,18 +40,31 @@ describe("createWriter.enqueue", () => {
     expect(row.headers).toBeNull();
   });
 
-  it("rejects unsupported topic values at the writer boundary", () => {
+  it("accepts arbitrary non-empty topic strings (policy enforced upstream)", () => {
     const writer = createWriter(db);
-    // @ts-expect-error — runtime guard, type forbids this
-    expect(() => writer.enqueue({ topic: "events", messageKey: "k", payload: "{}", headers: null })).toThrow();
+    writer.enqueue({
+      topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS",
+      messageKey: "k",
+      payload: "{}",
+      headers: null,
+    });
+    const row = db.query("SELECT topic FROM outbox").get() as { topic: string };
+    expect(row.topic).toBe("T_PRIVATE_SOURCE_DATADOG_ALERTS");
+  });
+
+  it("rejects empty topic strings at the writer boundary", () => {
+    const writer = createWriter(db);
+    expect(() =>
+      writer.enqueue({ topic: "", messageKey: "k", payload: "{}", headers: null }),
+    ).toThrow();
   });
 });
 
 describe("createWriter.backlogStats", () => {
   it("counts pending and failed rows", () => {
     const writer = createWriter(db);
-    writer.enqueue({ topic: "raw", messageKey: "a", payload: "{}", headers: null });
-    writer.enqueue({ topic: "raw", messageKey: "b", payload: "{}", headers: null });
+    writer.enqueue({ topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", messageKey: "a", payload: "{}", headers: null });
+    writer.enqueue({ topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", messageKey: "b", payload: "{}", headers: null });
     db.run("UPDATE outbox SET status='failed' WHERE message_key='b'");
     const stats = writer.backlogStats();
     expect(stats.pending).toBe(1);

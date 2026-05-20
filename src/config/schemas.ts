@@ -1,5 +1,7 @@
 // src/config/schemas.ts
 import { z } from "zod";
+import { checkGatewayTopic, expectedDlqTopic } from "./topicPolicy.ts";
+import { knownIdempotencyStrategy } from "../gateway/idempotencyStrategies.ts";
 
 const localSchema = z.strictObject({
   bootstrapServers: z
@@ -28,6 +30,121 @@ const confluentSchema = z.strictObject({
   apiKey: z.string().describe("Confluent Cloud API key (SASL/PLAIN username)."),
   apiSecret: z.string().describe("Confluent Cloud API secret (SASL/PLAIN password)."),
 });
+
+const routeSchema = z.strictObject({
+  name: z.string().min(1).describe("Human-readable route id; used for logs and as default sourceHeader."),
+  path: z
+    .string()
+    .min(2)
+    .startsWith("/")
+    .describe("Literal HTTP path the gateway listens on, e.g. /webhooks/elastic/autoops."),
+  topic: z
+    .string()
+    .min(1)
+    .describe("Full Kafka topic name; must match T_PRIVATE_SOURCE_<SYSTEM>_<ENTITY>."),
+  dlqTopic: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Optional companion DLQ name. If set, must equal DLQ_T_<topic>. Gateway never writes here."),
+  sourceHeader: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Override for the 'source' Kafka header. Defaults to name."),
+  keyFields: z
+    .array(z.string().min(1))
+    .min(1)
+    .describe("Body fields to consult in order for the partition key. First non-empty string wins."),
+  idempotency: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Named strategy from idempotencyStrategies registry. Optional."),
+});
+
+export type RouteConfig = z.infer<typeof routeSchema>;
+
+export const routesSchema = z
+  .array(routeSchema)
+  .min(1, "at least one route is required")
+  .superRefine((routes, ctx) => {
+    const pathSeen = new Map<string, number>();
+    const topicSeen = new Map<string, number>();
+    const dlqSeen = new Map<string, number>();
+
+    routes.forEach((r, i) => {
+      const topicCheck = checkGatewayTopic(r.topic);
+      if (!topicCheck.ok) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "topic"],
+          message: topicCheck.message,
+        });
+      }
+
+      if (r.dlqTopic !== undefined) {
+        const expected = expectedDlqTopic(r.topic);
+        if (r.dlqTopic !== expected) {
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "dlqTopic"],
+            message: `dlqTopic must be '${expected}'; got '${r.dlqTopic}'`,
+          });
+        }
+        if (r.dlqTopic.length > 249) {
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "dlqTopic"],
+            message: `dlqTopic length ${r.dlqTopic.length} exceeds Kafka limit of 249`,
+          });
+        }
+      }
+
+      if (r.idempotency !== undefined && !knownIdempotencyStrategy(r.idempotency)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "idempotency"],
+          message: `unknown idempotency strategy '${r.idempotency}'`,
+        });
+      }
+
+      const prevPath = pathSeen.get(r.path);
+      if (prevPath !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "path"],
+          message: `duplicate path '${r.path}' (also at routes[${prevPath}])`,
+        });
+      } else {
+        pathSeen.set(r.path, i);
+      }
+
+      const prevTopic = topicSeen.get(r.topic);
+      if (prevTopic !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "topic"],
+          message: `duplicate topic '${r.topic}' (also at routes[${prevTopic}])`,
+        });
+      } else {
+        topicSeen.set(r.topic, i);
+      }
+
+      if (r.dlqTopic !== undefined) {
+        const prevDlq = dlqSeen.get(r.dlqTopic);
+        if (prevDlq !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "dlqTopic"],
+            message: `duplicate dlqTopic '${r.dlqTopic}' (also at routes[${prevDlq}])`,
+          });
+        } else {
+          dlqSeen.set(r.dlqTopic, i);
+        }
+      }
+    });
+  });
 
 export const configSchema = z
   .strictObject({
@@ -96,6 +213,7 @@ export const configSchema = z
         .positive()
         .describe("Pending-row count above which the gateway logs a warn each iteration."),
     }),
+    routes: routesSchema,
   })
   .superRefine((cfg, ctx) => {
     const { kafka, app } = cfg;
