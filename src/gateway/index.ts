@@ -4,11 +4,14 @@ import { mkdirSync } from "node:fs";
 import { config } from "../config/index.ts";
 import { resetConfigCache } from "../config/loader.ts";
 import type { RouteConfig } from "../config/schemas.ts";
+import { createHealthAdmin } from "../health/admin.ts";
+import { createHealthMonitor } from "../health/monitor.ts";
 import { getLogger } from "../logging/index.ts";
 import { createProducer } from "../kafka/producer.ts";
 import { createKafkaProvider } from "../kafka/providers/index.ts";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../outbox/db.ts";
 import { startDrainer, type DrainerHandle } from "../outbox/drainer.ts";
+import { createDrainMetrics } from "../outbox/metrics.ts";
 import { createWriter, type OutboxWriter } from "../outbox/writer.ts";
 import { buildRoutes } from "./routes.ts";
 
@@ -49,6 +52,22 @@ if (config.outbox.enabled) {
   log.warn("outbox disabled; inline publish (escape hatch)");
 }
 
+const drainMetrics = createDrainMetrics();
+
+const healthAdmin = await createHealthAdmin(provider);
+const expectedTopics = config.routes.flatMap((r) =>
+  r.dlqTopic ? [r.topic, r.dlqTopic] : [r.topic],
+);
+const monitor = createHealthMonitor({
+  producer,
+  outboxDb,
+  admin: healthAdmin,
+  expectedTopics,
+  probeIntervalMs: config.health.probeIntervalMs,
+  probeTimeoutMs: config.health.probeTimeoutMs,
+});
+await monitor.start();
+
 let server: ReturnType<typeof Bun.serve> | undefined;
 
 function rebuildRoutes(newRoutes?: RouteConfig[]): ReturnType<typeof buildRoutes> {
@@ -69,6 +88,8 @@ function rebuildRoutes(newRoutes?: RouteConfig[]): ReturnType<typeof buildRoutes
   return buildRoutes({
     producer,
     outbox: outboxWriter,
+    monitor,
+    metrics: drainMetrics,
     adminContext,
   });
 }
@@ -113,6 +134,8 @@ async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
   server?.stop();
   if (drainer) await drainer.stop();
+  await monitor.stop();
+  await healthAdmin.close();
   await producer.disconnect();
   await provider.close();
   if (outboxDb) closeOutbox(outboxDb);

@@ -2,8 +2,10 @@
 import { makeAdminRoutesHandler } from "../admin/routesEndpoint.ts";
 import { config } from "../config/index.ts";
 import type { RouteConfig } from "../config/schemas.ts";
+import type { HealthMonitor } from "../health/monitor.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { getLogger } from "../logging/index.ts";
+import type { DrainMetrics } from "../outbox/metrics.ts";
 import type { OutboxWriter } from "../outbox/writer.ts";
 import { makeWebhookHandler } from "./handler.ts";
 
@@ -17,6 +19,8 @@ export type AdminContext = {
 export type RouteDeps = {
   producer: EventProducer;
   outbox?: OutboxWriter;
+  monitor: HealthMonitor;
+  metrics: DrainMetrics;
   adminContext?: AdminContext;
 };
 
@@ -33,29 +37,34 @@ export function buildRoutes(deps: RouteDeps): RoutesMap {
 
   const routes: RoutesMap = {
     "/healthz": () => {
+      const snap = deps.monitor.snapshot();
       const stats = outbox?.backlogStats();
-      const producerOk = producer.isConnected();
-      return Response.json(
-        {
-          ok: producerOk,
-          producer: { connected: producerOk },
-          outbox: stats
-            ? {
-                enabled: true,
-                pending: stats.pending,
-                failed: stats.failed,
-                oldestPendingAgeMs: stats.oldestPendingAgeMs,
-              }
-            : { enabled: false },
-          routes: config.routes.map((r) => ({
-            name: r.name,
-            path: r.path,
-            topic: r.topic,
-            dlqTopic: r.dlqTopic,
-          })),
-        },
-        { status: producerOk ? 200 : 503 },
-      );
+      const drain = deps.metrics.snapshot();
+      const body = {
+        ok: snap.ok,
+        status: snap.status,
+        checkedAt: snap.checkedAt,
+        dependencies: snap.dependencies,
+        outbox: stats
+          ? {
+              enabled: true,
+              pending: stats.pending,
+              failed: stats.failed,
+              oldestPendingAgeMs: stats.oldestPendingAgeMs,
+              pendingByTopic: stats.pendingByTopic,
+              publishedLast60s: drain.publishedLast60s,
+              lastPublishedAt: drain.lastPublishedAt,
+              lastError: drain.lastError,
+            }
+          : { enabled: false },
+        routes: config.routes.map((r) => ({
+          name: r.name,
+          path: r.path,
+          topic: r.topic,
+          dlqTopic: r.dlqTopic,
+        })),
+      };
+      return Response.json(body, { status: snap.ok ? 200 : 503 });
     },
   };
 
