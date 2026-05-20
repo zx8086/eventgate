@@ -1,12 +1,22 @@
 // test/unit/config.admin.test.ts
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildConfig } from "../../src/config/loader.ts";
 
 let snapshot: NodeJS.ProcessEnv;
+let dir: string;
 const baseEnv = { ENVIRONMENT: "dev", KAFKA_PROVIDER: "local" };
 
-beforeEach(() => { snapshot = { ...process.env }; });
-afterEach(() => { process.env = snapshot; });
+beforeEach(() => {
+  snapshot = { ...process.env };
+  dir = mkdtempSync(join(tmpdir(), "eventgate-admin-"));
+});
+afterEach(() => {
+  process.env = snapshot;
+  if (dir) rmSync(dir, { recursive: true, force: true });
+});
 
 describe("config.admin", () => {
   it("is undefined when ADMIN_TOKEN is unset", () => {
@@ -31,8 +41,15 @@ describe("config.routesFile", () => {
     expect(cfg.routesFile).toBeUndefined();
   });
 
-  it("is populated when ROUTES_FILE is set", () => {
-    const cfg = buildConfig({ ...baseEnv, ROUTES_FILE: "/tmp/routes.json" });
-    expect(cfg.routesFile).toBe("/tmp/routes.json");
+  it("is populated when ROUTES_FILE points at a valid routes array", () => {
+    const path = join(dir, "routes.json");
+    writeFileSync(
+      path,
+      JSON.stringify([
+        { name: "test-route", path: "/webhooks/test", topic: "T_PRIVATE_SOURCE_TEST_X", keyFields: ["id"] },
+      ]),
+    );
+    const cfg = buildConfig({ ...baseEnv, ROUTES_FILE: path });
+    expect(cfg.routesFile).toBe(path);
   });
 });
