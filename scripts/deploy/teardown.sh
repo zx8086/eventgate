@@ -14,7 +14,7 @@ fi
 cluster_arn="$(read_env ECS_CLUSTER_ARN)"
 
 if [[ -n "$cluster_arn" ]]; then
-  for svc in eventgate-gateway eventgate-writer; do
+  for svc in eventgate-gateway; do
     if aws ecs describe-services --cluster "$cluster_arn" --services "$svc" \
        --query "services[?status=='ACTIVE']" --output text | grep -q .; then
       log "scaling $svc to 0 and deleting"
@@ -41,7 +41,7 @@ if [[ -n "$msk_arn" ]]; then
   aws kafka delete-cluster --cluster-arn "$msk_arn" || true
 fi
 
-for role in eventgate-gateway-task eventgate-writer-task; do
+for role in eventgate-gateway-task; do
   aws iam delete-role-policy --role-name "$role" --policy-name eventgate-msk-access 2>/dev/null || true
   aws iam delete-role --role-name "$role" 2>/dev/null || true
 done
@@ -50,7 +50,7 @@ aws iam detach-role-policy --role-name eventgate-task-execution \
 aws iam delete-role --role-name eventgate-task-execution 2>/dev/null || true
 
 # Log groups
-for lg in /eventgate/gateway /eventgate/writer; do
+for lg in /eventgate/gateway; do
   aws logs delete-log-group --log-group-name "$lg" 2>/dev/null || true
 done
 
@@ -67,7 +67,7 @@ fi
 eip_id="$(read_env NAT_EIP_ID)"
 [[ -n "$eip_id" ]] && aws ec2 release-address --allocation-id "$eip_id" 2>/dev/null || true
 
-for sg in SG_ALB SG_GATEWAY SG_WRITER SG_MSK; do
+for sg in SG_ALB SG_GATEWAY SG_MSK; do
   sgid="$(read_env "$sg")"
   [[ -n "$sgid" ]] && aws ec2 delete-security-group --group-id "$sgid" 2>/dev/null || true
 done

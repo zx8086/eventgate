@@ -1,7 +1,7 @@
 # Logging
 
 > **Targets:** Bun 1.3.11+ | TypeScript 5.x | Pino 10
-> **Last updated:** 2026-05-19
+> **Last updated:** 2026-05-20
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
 eventgate emits structured logs in ECS NDJSON via Pino 10 with `@elastic/ecs-pino-format`. The logger factory in `src/logging/index.ts` returns child loggers bound to a `component` so each call site can be filtered without losing the service-wide fields.
@@ -11,7 +11,7 @@ eventgate emits structured logs in ECS NDJSON via Pino 10 with `@elastic/ecs-pin
 Each log line is a single JSON object on its own line:
 
 ```json
-{"@timestamp":"2026-05-19T10:14:22.108Z","log.level":"info","service.name":"eventgate","service.version":"0.1.0","service.environment":"prod","ecs.version":"8.10.0","component":"gateway","host":"0.0.0.0","port":3000,"topics":{"raw":"ops.elastic.autoops.raw.v1","events":"ops.elastic.autoops.events.v1"},"message":"gateway listening"}
+{"@timestamp":"2026-05-20T10:14:22.108Z","log.level":"info","service.name":"eventgate","service.version":"0.1.0","service.environment":"prod","ecs.version":"8.10.0","component":"gateway","host":"0.0.0.0","port":3000,"routes":[{"name":"elastic-autoops","path":"/webhooks/elastic/autoops","topic":"T_PRIVATE_SOURCE_ELASTIC_AUTOOPS"}],"message":"gateway listening"}
 ```
 
 | Field | Source | Notes |

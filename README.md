@@ -24,9 +24,10 @@ Kafka backend selection (local Redpanda / AWS MSK / Confluent Cloud) is abstract
 bun install
 cp .env.example .env
 docker compose up -d
-docker exec eventgate-redpanda rpk topic create T_PRIVATE_SOURCE_ELASTIC_AUTOOPS
 bun run dev:gateway
 ```
+
+`docker compose up -d` starts Redpanda and a one-shot `redpanda-init` companion that pre-creates `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS` (the seed route's topic from `src/config/defaults.ts`). To add a vendor, declare its topic in `ROUTES_JSON` / `ROUTES_FILE` and create it manually with `rpk topic create <topic>`.
 
 Send a test payload:
 
@@ -120,6 +121,6 @@ Tests cover the outbox (writer, drainer, backoff, migration), the opportunistic 
 
 Deploy scripts under `scripts/deploy/` stand up the gateway on ECS Fargate in `eu-central-1`, backed by MSK Serverless. The webhook URL is the ALB DNS name printed by `12-print-url.sh`.
 
-See [`docs/deployment/aws-ecs.md`](docs/deployment/aws-ecs.md) for the target topology and [`scripts/deploy/README.md`](scripts/deploy/README.md) for the operator runbook. Note: as of SIO-795, the scripts still provision the older two-service shape (gateway + writer + Couchbase env vars); cleanup of the writer service is tracked separately.
+See [`docs/deployment/aws-ecs.md`](docs/deployment/aws-ecs.md) for the target topology and [`scripts/deploy/README.md`](scripts/deploy/README.md) for the operator runbook.
 
 To tear the stack down: `scripts/deploy/teardown.sh` (interactive confirmation).

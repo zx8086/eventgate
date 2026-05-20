@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/deploy/08-iam-roles.sh
-# Creates the task execution role and per-service task roles with MSK perms.
+# Creates the task execution role and the gateway task role with MSK perms.
 
 SCRIPT_NAME="08-iam-roles"
 source "$(dirname "$0")/lib.sh"
@@ -23,7 +23,6 @@ ensure_role() {
 
 ensure_role eventgate-task-execution
 ensure_role eventgate-gateway-task
-ensure_role eventgate-writer-task
 
 # Task execution role: pull image from ECR + write logs.
 aws iam attach-role-policy --role-name eventgate-task-execution \
@@ -84,12 +83,9 @@ put_inline() {
 }
 
 put_inline eventgate-gateway-task
-put_inline eventgate-writer-task
 
 exec_arn="$(aws iam get-role --role-name eventgate-task-execution --query 'Role.Arn' --output text)"
 gw_arn="$(aws iam get-role --role-name eventgate-gateway-task --query 'Role.Arn' --output text)"
-wr_arn="$(aws iam get-role --role-name eventgate-writer-task --query 'Role.Arn' --output text)"
 
 write_env TASK_EXECUTION_ROLE_ARN "$exec_arn"
 write_env GATEWAY_TASK_ROLE_ARN "$gw_arn"
-write_env WRITER_TASK_ROLE_ARN "$wr_arn"
