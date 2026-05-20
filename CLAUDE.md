@@ -42,7 +42,7 @@ src/
     routesFile.ts         atomic-write helpers for ROUTES_FILE
     routesEndpoint.ts     makeAdminRoutesHandler factory
   kafka/
-    producer.ts           EventProducer wrapping @platformatic/kafka Producer (publishRaw only)
+    producer.ts           EventProducer wrapping @platformatic/kafka Producer (sendByTopic)
     providers/
       types.ts            KafkaProvider, KafkaConnectionConfig, MskAuthMode
       errors.ts           KafkaProviderError + ProviderErrorCode
@@ -136,7 +136,7 @@ When the JSON body looks AutoOps-shaped, the helper computes `sha256(resourceId 
 ```
 config.app.{name, version, environment}
 config.server.{port}
-config.kafka.{provider, clientId, topics:{raw, events, dlq}, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
+config.kafka.{provider, clientId, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
 config.observability.{logLevel}
 config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
 config.routes[].{name, path, topic, dlqTopic?, sourceHeader?, keyFields, idempotency?}

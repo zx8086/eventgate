@@ -71,7 +71,7 @@ On close (`closeOutbox`), the code runs `db.fileControl(SQLITE_FCNTL_PERSIST_WAL
 
 ## Topic mapping
 
-The drainer is topic-agnostic. Each row stores a logical topic family (currently only `raw`); the drainer resolves it to the configured Kafka topic name from `config.kafka.topics` at publish time. That means renaming a topic in config does not require a database migration — only undispatched rows continue to use the new name.
+The drainer is topic-agnostic. Each row stores the exact Kafka topic name it should publish to (from `route.topic` at enqueue time); the drainer just hands that string to `producer.sendByTopic` and lets `@platformatic/kafka` route it. Renaming a route's topic in config affects newly enqueued rows only; previously enqueued, undispatched rows continue to publish to the topic they were enqueued with.
 
 ## Delivery semantics
 

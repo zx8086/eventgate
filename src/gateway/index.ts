@@ -104,7 +104,7 @@ log.info(
   {
     host: server.hostname,
     port: server.port,
-    topics: { raw: config.kafka.topics.raw, events: config.kafka.topics.events },
+    routes: config.routes.map((r) => ({ name: r.name, path: r.path, topic: r.topic })),
   },
   "gateway listening",
 );

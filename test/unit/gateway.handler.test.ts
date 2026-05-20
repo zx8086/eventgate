@@ -28,7 +28,6 @@ const baseRoute: RouteConfig = {
 };
 
 const noopProducer = {
-  publishRaw: async () => {},
   isConnected: () => true,
   disconnect: async () => {},
   sendByTopic: async () => {},
@@ -95,17 +94,60 @@ describe("makeWebhookHandler", () => {
     expect(outbox.calls[0]?.headers?.idempotencyKey).toBeUndefined();
   });
 
-  it("falls back to inline producer when outbox is absent and returns 202", async () => {
-    const published: unknown[] = [];
+  it("inline-publish path uses route.topic and forwards headers", async () => {
+    const calls: Array<{
+      topic: string;
+      key: string;
+      value: string;
+      headers: Record<string, string> | null | undefined;
+    }> = [];
     const spyProducer = {
       ...noopProducer,
-      publishRaw: async (_key: string, body: unknown) => {
-        published.push(body);
+      sendByTopic: async (
+        topic: string,
+        key: string,
+        value: string,
+        headers?: Record<string, string> | null,
+      ) => {
+        calls.push({ topic, key, value, headers });
       },
     };
     const handler = makeWebhookHandler(baseRoute, { producer: spyProducer });
-    const res = await handler(postJson({ resourceId: "dep-1" }));
+    const res = await handler(
+      postJson({ resourceId: "dep-1", title: "t", status: "open" }),
+    );
     expect(res.status).toBe(202);
-    expect(published).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.topic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
+    expect(calls[0]?.key).toBe("dep-1");
+    expect(calls[0]?.headers?.source).toBe("elastic-autoops");
+    expect(typeof calls[0]?.headers?.idempotencyKey).toBe("string");
+    const parsed = JSON.parse(calls[0]?.value ?? "{}");
+    expect(parsed.raw).toEqual({ resourceId: "dep-1", title: "t", status: "open" });
+  });
+
+  it("inline-publish path uses each route's own topic in multi-route configs", async () => {
+    const calls: Array<{ topic: string }> = [];
+    const spyProducer = {
+      ...noopProducer,
+      sendByTopic: async (topic: string) => {
+        calls.push({ topic });
+      },
+    };
+    const routeA: RouteConfig = { ...baseRoute, topic: "T_PRIVATE_SOURCE_A_X" };
+    const routeB: RouteConfig = {
+      ...baseRoute,
+      name: "b",
+      path: "/webhooks/b",
+      topic: "T_PRIVATE_SOURCE_B_Y",
+    };
+    const handlerA = makeWebhookHandler(routeA, { producer: spyProducer });
+    const handlerB = makeWebhookHandler(routeB, { producer: spyProducer });
+    await handlerA(postJson({ resourceId: "1" }));
+    await handlerB(postJson({ resourceId: "2" }));
+    expect(calls.map((c) => c.topic)).toEqual([
+      "T_PRIVATE_SOURCE_A_X",
+      "T_PRIVATE_SOURCE_B_Y",
+    ]);
   });
 });

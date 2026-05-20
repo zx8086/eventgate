@@ -13,11 +13,6 @@ export const defaults = {
   kafka: {
     provider: "local" as const,
     clientId: "eventgate-gateway",
-    topics: {
-      raw: "ops.elastic.autoops.raw.v1",
-      events: "ops.elastic.autoops.events.v1",
-      dlq: "ops.elastic.autoops.dlq.v1",
-    },
     local: {
       bootstrapServers: ["localhost:9092"],
     },

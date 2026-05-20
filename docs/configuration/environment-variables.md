@@ -35,9 +35,8 @@ Comma-separated lists are trimmed and empty entries are dropped.
 |----------|---------|-------------|
 | `KAFKA_PROVIDER` | `local` | One of `local`, `msk`, `confluent`. See [../architecture/kafka-provider-factory.md](../architecture/kafka-provider-factory.md). |
 | `KAFKA_CLIENT_ID` | `eventgate-gateway` | Client id for the producer. |
-| `KAFKA_TOPIC_RAW` | `ops.elastic.autoops.raw.v1` | Topic for verbatim webhook bodies — the **only** topic the gateway writes to. |
-| `KAFKA_TOPIC_EVENTS` | `ops.elastic.autoops.events.v1` | Reserved for a future normalizer/consumer service. Provisioned by `redpanda-init` / `09-create-topics.ts` but not written by this service. |
-| `KAFKA_TOPIC_DLQ` | `ops.elastic.autoops.dlq.v1` | Reserved for downstream consumers. Provisioned but not written by this service. |
+
+Topic names are declared per route in `config.routes[]` (see the Routes section below), not at the kafka block.
 
 ## Local provider
 
@@ -149,3 +148,4 @@ LOG_LEVEL=debug
 | 2026-05-19 | Added `OUTBOX_*` env vars for the SQLite outbox layer (SIO-799) |
 | 2026-05-19 | Clarified that `KAFKA_TOPIC_EVENTS` / `KAFKA_TOPIC_DLQ` are reserved for future consumer services and not written by the gateway (SIO-801) |
 | 2026-05-20 | Removed unused `TENANT` env var; nothing in `src/` ever read `config.app.tenant` (SIO-808) |
+| 2026-05-20 | Removed legacy `KAFKA_TOPIC_RAW|EVENTS|DLQ` env vars and the `kafka.topics.*` config block; per-route `topic` is the only source of truth. Also fixed the inline-publish (`OUTBOX_ENABLED=false`) path so it publishes to `route.topic` instead of the dropped legacy topic (SIO-809). |
