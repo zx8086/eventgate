@@ -49,7 +49,7 @@ Required when `KAFKA_PROVIDER=msk`.
 |----------|---------|-------------|
 | `MSK_REGION` | (unset) | AWS region of the cluster. Required. |
 | `MSK_CLUSTER_ARN` | (unset) | Cluster ARN. When `KAFKA_BROKERS` is empty, brokers are discovered via `GetBootstrapBrokersCommand`. Either this or `KAFKA_BROKERS` must be set. |
-| `MSK_AUTH_MODE` | `iam` | `iam` (SASL/OAUTHBEARER + TLS) \| `tls` (TLS only) \| `none` (PLAINTEXT). |
+| `MSK_AUTH_MODE` | `none` | `iam` (SASL/OAUTHBEARER + TLS) \| `tls` (TLS only) \| `none` (PLAINTEXT). Set explicitly to `iam` for AWS-managed MSK Serverless. |
 
 ## Confluent Cloud provider extras
 

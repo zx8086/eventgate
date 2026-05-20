@@ -35,13 +35,13 @@ const producer = await createProducer(config.kafka.clientId, provider);
 | Provider | Required env vars | Optional |
 |----------|-------------------|----------|
 | `local` (default) | — | `KAFKA_BROKERS` (default `localhost:9092`) |
-| `msk` | `MSK_REGION` plus one of `KAFKA_BROKERS` / `MSK_CLUSTER_ARN` | `MSK_AUTH_MODE` (default `iam`) |
+| `msk` | `MSK_REGION` plus one of `KAFKA_BROKERS` / `MSK_CLUSTER_ARN` | `MSK_AUTH_MODE` (default `none`; set to `iam` for AWS-managed MSK Serverless) |
 | `confluent` | `KAFKA_BROKERS`, `CONFLUENT_API_KEY`, `CONFLUENT_API_SECRET` | — |
 
 Two extra rules:
 
 - `KAFKA_PROVIDER=local` is **rejected** when `ENVIRONMENT=prod`. Prod must use `msk` or `confluent`.
-- `MSK_AUTH_MODE` defaults to `iam`. The provider logs a warning at startup if `MSK_AUTH_MODE` is unset, so operators see the resolved value in logs.
+- `MSK_AUTH_MODE` defaults to `none` (PLAINTEXT). The provider logs a warning at startup if `MSK_AUTH_MODE` is unset, so operators see the resolved value in logs. Production deployments against AWS-managed MSK Serverless must set `MSK_AUTH_MODE=iam` explicitly.
 
 ## Environment variables
 
@@ -52,7 +52,7 @@ Two extra rules:
 | `KAFKA_BROKERS` | all | CSV bootstrap brokers (parsed to `string[]`). Default `localhost:9092`. Required for `local`/`confluent`; for `msk` may be omitted when `MSK_CLUSTER_ARN` is set. |
 | `MSK_REGION` | `msk` | AWS region of the MSK cluster. |
 | `MSK_CLUSTER_ARN` | `msk` | Cluster ARN; when set and `KAFKA_BROKERS` is empty, brokers are discovered via `GetBootstrapBrokersCommand`. One of `KAFKA_BROKERS` / `MSK_CLUSTER_ARN` required. |
-| `MSK_AUTH_MODE` | `msk` | `iam` (default) \| `tls` \| `none`. |
+| `MSK_AUTH_MODE` | `msk` | `iam` \| `tls` \| `none` (default). Set to `iam` for AWS-managed MSK Serverless. |
 | `CONFLUENT_API_KEY` | `confluent` | SASL/PLAIN username. |
 | `CONFLUENT_API_SECRET` | `confluent` | SASL/PLAIN password. |
 
