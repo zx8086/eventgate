@@ -20,7 +20,7 @@ function fakeOutbox(): { writer: OutboxWriter; rows: EnqueueInput[] } {
       rows.push(row);
     },
     backlogStats(): BacklogStats {
-      return { pending: rows.length, failed: 0, oldestPendingAgeMs: 0 };
+      return { pending: rows.length, failed: 0, oldestPendingAgeMs: 0, pendingByTopic: {} };
     },
   };
   return { writer, rows };

@@ -13,7 +13,7 @@ function fakeOutbox() {
   const calls: Array<{ topic: string; messageKey: string }> = [];
   return {
     enqueue: (row: { topic: string; messageKey: string }) => calls.push(row),
-    backlogStats: () => ({ pending: 0, failed: 0, oldestPendingAgeMs: 0 }),
+    backlogStats: () => ({ pending: 0, failed: 0, oldestPendingAgeMs: 0, pendingByTopic: {} }),
     calls,
   };
 }

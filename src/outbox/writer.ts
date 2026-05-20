@@ -14,6 +14,7 @@ export type BacklogStats = {
   pending: number;
   failed: number;
   oldestPendingAgeMs: number;
+  pendingByTopic: Record<string, number>;
 };
 
 export type OutboxWriter = {
@@ -51,6 +52,9 @@ export function createWriter(db: OutboxDatabase): OutboxWriter {
   const oldestPendingStmt = db.query(
     "SELECT MIN(created_at) AS m FROM outbox WHERE status = 'pending'",
   );
+  const pendingByTopicStmt = db.query(
+    "SELECT topic, COUNT(*) AS c FROM outbox WHERE status = 'pending' GROUP BY topic",
+  );
 
   return {
     enqueue(row) {
@@ -61,7 +65,10 @@ export function createWriter(db: OutboxDatabase): OutboxWriter {
       const failed = (failedCountStmt.get() as { c: number }).c;
       const oldest = (oldestPendingStmt.get() as { m: number | null }).m;
       const oldestPendingAgeMs = oldest === null ? 0 : Date.now() - oldest;
-      return { pending, failed, oldestPendingAgeMs };
+      const rows = pendingByTopicStmt.all() as Array<{ topic: string; c: number }>;
+      const pendingByTopic: Record<string, number> = {};
+      for (const r of rows) pendingByTopic[r.topic] = r.c;
+      return { pending, failed, oldestPendingAgeMs, pendingByTopic };
     },
   };
 }

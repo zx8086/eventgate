@@ -74,6 +74,24 @@ describe("createWriter.backlogStats", () => {
 
   it("returns oldestPendingAgeMs=0 when nothing pending", () => {
     const writer = createWriter(db);
-    expect(writer.backlogStats()).toEqual({ pending: 0, failed: 0, oldestPendingAgeMs: 0 });
+    expect(writer.backlogStats()).toEqual({ pending: 0, failed: 0, oldestPendingAgeMs: 0, pendingByTopic: {} });
+  });
+
+  it("breaks pending counts down by topic", () => {
+    const writer = createWriter(db);
+    writer.enqueue({ topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", messageKey: "a", payload: "{}", headers: null });
+    writer.enqueue({ topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS", messageKey: "b", payload: "{}", headers: null });
+    writer.enqueue({ topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS", messageKey: "c", payload: "{}", headers: null });
+    db.run("UPDATE outbox SET status='dispatched' WHERE message_key='a'");
+    const stats = writer.backlogStats();
+    expect(stats.pendingByTopic).toEqual({
+      T_PRIVATE_SOURCE_ELASTIC_AUTOOPS: 1,
+      T_PRIVATE_SOURCE_DATADOG_ALERTS: 1,
+    });
+  });
+
+  it("returns an empty pendingByTopic object when no pending rows", () => {
+    const writer = createWriter(db);
+    expect(writer.backlogStats().pendingByTopic).toEqual({});
   });
 });

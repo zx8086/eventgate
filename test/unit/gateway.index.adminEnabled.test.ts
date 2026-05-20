@@ -10,7 +10,7 @@ const noopProducer = {
 };
 const noopOutbox = {
   enqueue: () => {},
-  backlogStats: () => ({ pending: 0, failed: 0, oldestPendingAgeMs: 0 }),
+  backlogStats: () => ({ pending: 0, failed: 0, oldestPendingAgeMs: 0, pendingByTopic: {} }),
 };
 
 let snapshot: NodeJS.ProcessEnv;
