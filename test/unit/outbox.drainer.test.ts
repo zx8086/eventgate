@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../../src/outbox/db.ts";
 import { createWriter, type EnqueueInput } from "../../src/outbox/writer.ts";
 import { runOutboxIteration } from "../../src/outbox/drainer.ts";
+import { createDrainMetrics } from "../../src/outbox/metrics.ts";
 
 type Sent = { topic: string; key: string; value: string; headers?: Record<string, string> | null };
 
@@ -149,5 +150,35 @@ describe("runOutboxIteration", () => {
     await runOutboxIteration({ db, producer, config: cfg });
     const withHeaders = producer.sent.find((s) => s.headers !== null);
     expect(withHeaders?.headers).toEqual({ idempotencyKey: "abc" });
+  });
+});
+
+describe("runOutboxIteration metrics + error logging", () => {
+  test("records published rows in DrainMetrics", async () => {
+    const writer = createWriter(db);
+    seedTwoPending(writer);
+    const producer = makeFakeProducer();
+    const metrics = createDrainMetrics({ windowMs: 60_000 });
+
+    await runOutboxIteration({ db, producer, config: cfg, metrics });
+
+    const snap = metrics.snapshot();
+    expect(snap.publishedLast60s).toBe(2);
+    expect(snap.lastPublishedAt).not.toBeNull();
+    expect(snap.lastError).toBeNull();
+  });
+
+  test("records the broker error text on failed publish", async () => {
+    const writer = createWriter(db);
+    seedTwoPending(writer);
+    const producer = makeFakeProducer({ "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS": 2 });
+    const metrics = createDrainMetrics({ windowMs: 60_000 });
+
+    await runOutboxIteration({ db, producer, config: cfg, metrics });
+
+    const snap = metrics.snapshot();
+    expect(snap.publishedLast60s).toBe(0);
+    expect(snap.lastError?.topic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
+    expect(snap.lastError?.message).toMatch(/forced failure/);
   });
 });
