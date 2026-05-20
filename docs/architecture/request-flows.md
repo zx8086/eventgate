@@ -157,7 +157,7 @@ sequenceDiagram
                     alt reload throws
                         Server-->>Idx: error
                         Idx-->>A: error (caught)
-                        A-->>Op: 500 { error: "reload failed",<br/>message: "routes persisted; restart will apply" }
+                        A-->>Op: 500 reload failed (routes persisted, restart will apply)
                     else reloaded
                         Server-->>Idx: ok
                         Idx-->>A: void
