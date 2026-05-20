@@ -78,7 +78,13 @@ export function createHealthMonitor(opts: HealthMonitorOptions): HealthMonitor {
       const dep = deps[name];
       return dep === undefined ? true : dep.ok;
     });
-    const allOk = requiredOk && (deps.topics?.ok ?? true);
+    // Non-required dependencies (kafkaBroker, topics) demote status to
+    // "degraded" when they fail but never flip `ok` to false — operators see
+    // the failure in the JSON and state-change logs, ALB stays in service.
+    const allOk =
+      requiredOk &&
+      (deps.kafkaBroker?.ok ?? true) &&
+      (deps.topics?.ok ?? true);
     const status: HealthSnapshot["status"] = !requiredOk ? "unhealthy" : !allOk ? "degraded" : "healthy";
 
     return { status, ok: requiredOk, checkedAt, dependencies: deps };

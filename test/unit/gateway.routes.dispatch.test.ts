@@ -181,6 +181,9 @@ describe("buildRoutes with multiple routes", () => {
   });
 
   it("healthz returns 503 + unhealthy when a required dependency fails", async () => {
+    // The required deps that flip /healthz to 503 are kafkaProducer and
+    // outboxDb. kafkaBroker is intentionally non-required (SIO-816): its
+    // probe failure produces "degraded" + 200, not "unhealthy" + 503.
     const outbox = fakeOutbox();
     const unhealthy: HealthSnapshot = {
       ...healthySnap,
@@ -188,7 +191,7 @@ describe("buildRoutes with multiple routes", () => {
       ok: false,
       dependencies: {
         ...healthySnap.dependencies,
-        kafkaBroker: { ok: false, lastCheckedAt: 1_000, lastError: "connection refused" },
+        kafkaProducer: { ok: false, lastCheckedAt: 1_000, connected: false, lastError: "producer disconnected" },
       },
     };
     const routes = buildRoutes({
@@ -202,6 +205,33 @@ describe("buildRoutes with multiple routes", () => {
     expect(res.status).toBe(503);
     const body = await res.json() as { status: string };
     expect(body.status).toBe("unhealthy");
+  });
+
+  it("healthz returns 200 + degraded when only the kafkaBroker probe fails (SIO-816)", async () => {
+    const outbox = fakeOutbox();
+    const brokerProbeFailed: HealthSnapshot = {
+      ...healthySnap,
+      status: "degraded",
+      // ok stays true — broker probe failure must not flip the ALB gate.
+      ok: true,
+      dependencies: {
+        ...healthySnap.dependencies,
+        kafkaBroker: { ok: false, lastCheckedAt: 1_000, lastError: "redpanda admin path not implemented" },
+      },
+    };
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(brokerProbeFailed),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
+    const healthz = routes["/healthz"] as () => Response;
+    const res = healthz();
+    expect(res.status).toBe(200);
+    const body = await res.json() as { status: string; dependencies: { kafkaBroker: { ok: boolean; lastError?: string } } };
+    expect(body.status).toBe("degraded");
+    expect(body.dependencies.kafkaBroker.ok).toBe(false);
+    expect(body.dependencies.kafkaBroker.lastError).toMatch(/redpanda/);
   });
 
   it("healthz includes outbox stats and drain metrics", async () => {
