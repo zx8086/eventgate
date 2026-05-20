@@ -1,4 +1,5 @@
 // src/config/loader.ts
+import { readFileSync } from "node:fs";
 import { defaults } from "./defaults.ts";
 import { mapEnv, type EnvOverrides } from "./envMapping.ts";
 import { configSchema, type AppConfig } from "./schemas.ts";
@@ -27,13 +28,28 @@ function mergeDeep<T extends object>(base: T, overrides: unknown): T {
 export function buildConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const overrides: EnvOverrides = mapEnv(env);
 
-  // `routes` is replace-not-merge. Pull it out, merge the rest deeply,
-  // then attach `routes` separately (env wins; otherwise defaults stand).
-  const { routes: routesOverride, ...rest } = overrides;
+  // `routes` resolution: file > env > defaults. Pull `routes` and `routesFile`
+  // out of overrides; merge the rest; then attach the resolved routes.
+  const { routes: routesOverride, routesFile, ...rest } = overrides;
   const merged = mergeDeep(defaults as unknown as AppConfig, rest);
+
+  let resolvedRoutes: unknown = (defaults as unknown as AppConfig).routes;
+  if (routesFile !== undefined) {
+    // File source — fail fast on read / parse / shape errors.
+    const raw = readFileSync(routesFile, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`ROUTES_FILE ${routesFile} must contain a JSON array`);
+    }
+    resolvedRoutes = parsed;
+  } else if (routesOverride !== undefined) {
+    resolvedRoutes = routesOverride;
+  }
+
   const withRoutes: AppConfig = {
     ...merged,
-    routes: (routesOverride ?? (defaults as unknown as AppConfig).routes) as AppConfig["routes"],
+    routesFile,
+    routes: resolvedRoutes as AppConfig["routes"],
   };
 
   const result = configSchema.safeParse(withRoutes);
