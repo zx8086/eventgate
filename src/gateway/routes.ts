@@ -81,9 +81,9 @@ export function buildRoutes(deps: RouteDeps): RoutesMap {
         onReload: deps.adminContext.onReload,
       }),
     };
-    log.info(
+    log.debug(
       { path: "/admin/routes", routesFilePath: deps.adminContext.routesFilePath },
-      "admin endpoint enabled",
+      "admin endpoint registered",
     );
   } else if (config.admin?.token) {
     log.warn(
