@@ -68,10 +68,3 @@ export async function createProducer(
     },
   };
 }
-
-export function resolveOutboxTopic(
-  topic: "raw" | "events" | "dlq",
-  topics: { raw: string; events: string; dlq: string },
-): string {
-  return topics[topic];
-}
