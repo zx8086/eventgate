@@ -162,7 +162,6 @@ export const configSchema = z
       name: z.string().min(1),
       version: z.string().min(1),
       environment: z.enum(["dev", "staging", "prod", "test"]).describe("Deployment environment."),
-      tenant: z.string().min(1).describe("Logical tenant; flows onto every normalized event."),
     }),
     server: z.strictObject({
       port: z.number().int().min(1).max(65535),

@@ -22,7 +22,6 @@ Comma-separated lists are trimmed and empty entries are dropped.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENVIRONMENT` | `dev` | One of `dev`, `staging`, `prod`, `test`. Triggers production safety refinements. |
-| `TENANT` | `elastic-cloud` | Logical tenant; flows onto every normalized event. |
 
 ## Server
 
@@ -149,3 +148,4 @@ LOG_LEVEL=debug
 | 2026-05-19 | Replaced Couchbase + KAFKA_BROKERS/AUTH/REGION with Kafka provider factory env vars (SIO-795) |
 | 2026-05-19 | Added `OUTBOX_*` env vars for the SQLite outbox layer (SIO-799) |
 | 2026-05-19 | Clarified that `KAFKA_TOPIC_EVENTS` / `KAFKA_TOPIC_DLQ` are reserved for future consumer services and not written by the gateway (SIO-801) |
+| 2026-05-20 | Removed unused `TENANT` env var; nothing in `src/` ever read `config.app.tenant` (SIO-808) |

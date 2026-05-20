@@ -134,7 +134,7 @@ When the JSON body looks AutoOps-shaped, the helper computes `sha256(resourceId 
 ## Config shape (4-pillar)
 
 ```
-config.app.{name, version, environment, tenant}
+config.app.{name, version, environment}
 config.server.{port}
 config.kafka.{provider, clientId, topics:{raw, events, dlq}, local:{bootstrapServers}, msk:{region, clusterArn, brokers, authMode}, confluent:{bootstrapServers, apiKey, apiSecret}}
 config.observability.{logLevel}
