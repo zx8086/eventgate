@@ -7,6 +7,7 @@ import type { RouteConfig } from "../config/schemas.ts";
 import { createHealthAdmin } from "../health/admin.ts";
 import { createHealthMonitor } from "../health/monitor.ts";
 import { getLogger } from "../logging/index.ts";
+import { startHeartbeat, type HeartbeatHandle } from "../logging/heartbeat.ts";
 import { createProducer } from "../kafka/producer.ts";
 import { createKafkaProvider } from "../kafka/providers/index.ts";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../outbox/db.ts";
@@ -21,6 +22,8 @@ const provider = createKafkaProvider(config);
 log.info({ provider: provider.name, providerType: provider.type }, "kafka provider selected");
 
 const producer = await createProducer(config.kafka.clientId, provider);
+
+const drainMetrics = createDrainMetrics();
 
 let outboxDb: OutboxDatabase | undefined;
 let outboxWriter: OutboxWriter | undefined;
@@ -43,6 +46,7 @@ if (config.outbox.enabled) {
       busyPollMs: config.outbox.busyPollMs,
       backlogWarnThreshold: config.outbox.backlogWarnThreshold,
     },
+    metrics: drainMetrics,
   });
   log.info(
     { dbPath: config.outbox.dbPath, batchSize: config.outbox.batchSize },
@@ -51,8 +55,6 @@ if (config.outbox.enabled) {
 } else {
   log.warn("outbox disabled; inline publish (escape hatch)");
 }
-
-const drainMetrics = createDrainMetrics();
 
 const healthAdmin = await createHealthAdmin(provider);
 const expectedTopics = config.routes.flatMap((r) => [r.topic, r.dlqTopic]);
@@ -123,17 +125,60 @@ log.info(
   {
     host: server.hostname,
     port: server.port,
+    provider: provider.name,
+    providerType: provider.type,
+    outbox: {
+      enabled: config.outbox.enabled,
+      dbPath: config.outbox.enabled ? config.outbox.dbPath : null,
+    },
     routes: config.routes.map((r) => ({ name: r.name, path: r.path, topic: r.topic })),
+    health: {
+      probeIntervalMs: config.health.probeIntervalMs,
+      probeTimeoutMs: config.health.probeTimeoutMs,
+      dependencies: [
+        "kafkaProducer",
+        config.outbox.enabled ? "outboxDb" : null,
+        "kafkaBroker",
+        "topics",
+      ].filter((d): d is string => d !== null),
+    },
+    heartbeatMs: config.health.heartbeatMs,
   },
   "gateway listening",
 );
 
+const heartbeat: HeartbeatHandle = startHeartbeat({
+  intervalMs: config.health.heartbeatMs,
+  snapshot: () => {
+    const snap = monitor.snapshot();
+    const drain = drainMetrics.snapshot();
+    const stats = outboxWriter?.backlogStats();
+    return {
+      producerConnected: snap.dependencies.kafkaProducer?.ok ?? false,
+      brokerOk: snap.dependencies.kafkaBroker?.ok ?? false,
+      topicsOk: snap.dependencies.topics?.ok ?? true,
+      status: snap.status,
+      ...(stats
+        ? {
+            pending: stats.pending,
+            failed: stats.failed,
+            oldestPendingAgeMs: stats.oldestPendingAgeMs,
+            pendingByTopic: stats.pendingByTopic,
+          }
+        : {}),
+      publishedLast60s: drain.publishedLast60s,
+      lastPublishedAt: drain.lastPublishedAt,
+    };
+  },
+});
+
 async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
   server?.stop();
-  if (drainer) await drainer.stop();
+  heartbeat.stop();
   await monitor.stop();
   await healthAdmin.close();
+  if (drainer) await drainer.stop();
   await producer.disconnect();
   await provider.close();
   if (outboxDb) closeOutbox(outboxDb);
