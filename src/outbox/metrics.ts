@@ -43,6 +43,9 @@ export function createDrainMetrics(opts: DrainMetricsOptions = {}): DrainMetrics
       if (publishedAt.length > 1_000_000) publishedAt.splice(0, publishedAt.length - 600_000);
     },
     recordError(topic, message) {
+      // lastError is intentionally not cleared on a subsequent successful
+      // publish: operators investigating an outage may still want the most
+      // recent failure reason visible after the drainer has recovered.
       lastError = { topic, message, at: now() };
     },
     snapshot(): DrainMetricsSnapshot {
