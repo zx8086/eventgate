@@ -4,30 +4,19 @@ import { checkGatewayTopic, expectedDlqTopic } from "./topicPolicy.ts";
 import { checkReservedPath } from "./reservedPaths.ts";
 import { knownIdempotencyStrategy } from "../gateway/idempotencyStrategies.ts";
 
-const localSchema = z.strictObject({
-  bootstrapServers: z
-    .array(z.string().min(1))
-    .min(1)
-    .describe("Bootstrap brokers for local Kafka / Redpanda."),
-});
-
 const mskSchema = z.strictObject({
   region: z
     .string()
     .describe("AWS region of the MSK cluster. Required when provider=msk."),
   clusterArn: z
     .string()
-    .describe("MSK cluster ARN. Either this or msk.brokers must be set."),
-  brokers: z
-    .string()
-    .describe("CSV bootstrap brokers. Either this or msk.clusterArn must be set."),
+    .describe("MSK cluster ARN. When set and KAFKA_BROKERS is empty, brokers are discovered via GetBootstrapBrokersCommand."),
   authMode: z
     .enum(["iam", "tls", "none"])
     .describe("MSK auth mode. 'iam' uses OAUTHBEARER SASL with a short-lived IAM token."),
 });
 
 const confluentSchema = z.strictObject({
-  bootstrapServers: z.string().describe("Confluent Cloud bootstrap servers (host:port)."),
   apiKey: z.string().describe("Confluent Cloud API key (SASL/PLAIN username)."),
   apiSecret: z.string().describe("Confluent Cloud API secret (SASL/PLAIN password)."),
 });
@@ -171,7 +160,9 @@ export const configSchema = z
         .enum(["local", "msk", "confluent"])
         .describe("Which Kafka backend to connect to. Selected by KAFKA_PROVIDER."),
       clientId: z.string().min(1).describe("Kafka client id used by the producer."),
-      local: localSchema,
+      brokers: z
+        .array(z.string().min(1))
+        .describe("Bootstrap brokers (CSV-parsed from KAFKA_BROKERS). Required for local/confluent; optional for msk when MSK_CLUSTER_ARN is set (brokers are discovered)."),
       msk: mskSchema,
       confluent: confluentSchema,
     }),
@@ -236,25 +227,38 @@ export const configSchema = z
   .superRefine((cfg, ctx) => {
     const { kafka, app } = cfg;
 
+    // Brokers required for local and confluent. For msk, either KAFKA_BROKERS
+    // OR MSK_CLUSTER_ARN must be set; the provider resolves brokers from the
+    // ARN at startup when KAFKA_BROKERS is empty.
+    if (kafka.provider === "local" || kafka.provider === "confluent") {
+      if (kafka.brokers.length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["kafka", "brokers"],
+          message: `KAFKA_BROKERS is required when provider=${kafka.provider}`,
+        });
+      }
+    }
+
     if (kafka.provider === "msk") {
       if (!kafka.msk.region) {
         ctx.addIssue({
           code: "custom",
           path: ["kafka", "msk", "region"],
-          message: "msk.region is required when provider=msk",
+          message: "MSK_REGION is required when provider=msk",
         });
       }
-      if (!kafka.msk.clusterArn && !kafka.msk.brokers) {
+      if (kafka.brokers.length === 0 && !kafka.msk.clusterArn) {
         ctx.addIssue({
           code: "custom",
-          path: ["kafka", "msk"],
-          message: "msk requires either clusterArn or brokers when provider=msk",
+          path: ["kafka", "brokers"],
+          message: "provider=msk requires either KAFKA_BROKERS or MSK_CLUSTER_ARN",
         });
       }
     }
 
     if (kafka.provider === "confluent") {
-      for (const field of ["bootstrapServers", "apiKey", "apiSecret"] as const) {
+      for (const field of ["apiKey", "apiSecret"] as const) {
         if (!kafka.confluent[field]) {
           ctx.addIssue({
             code: "custom",

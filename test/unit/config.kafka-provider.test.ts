@@ -8,12 +8,12 @@ describe("kafka.provider dispatch", () => {
   it("defaults provider to local with localhost:9092", () => {
     const cfg = buildConfig({});
     expect(cfg.kafka.provider).toBe("local");
-    expect(cfg.kafka.local.bootstrapServers).toEqual(["localhost:9092"]);
+    expect(cfg.kafka.brokers).toEqual(["localhost:9092"]);
   });
 
-  it("accepts a CSV KAFKA_LOCAL_BOOTSTRAP_SERVERS override", () => {
-    const cfg = buildConfig({ KAFKA_LOCAL_BOOTSTRAP_SERVERS: "a:9092,b:9092" });
-    expect(cfg.kafka.local.bootstrapServers).toEqual(["a:9092", "b:9092"]);
+  it("accepts a CSV KAFKA_BROKERS override", () => {
+    const cfg = buildConfig({ KAFKA_BROKERS: "a:9092,b:9092" });
+    expect(cfg.kafka.brokers).toEqual(["a:9092", "b:9092"]);
   });
 });
 
@@ -21,7 +21,7 @@ describe("msk provider validation", () => {
   beforeEach(() => resetConfigCache());
   afterEach(() => resetConfigCache());
 
-  it("accepts msk with region + clusterArn", () => {
+  it("accepts msk with region + clusterArn (brokers resolved at startup via discovery)", () => {
     const cfg = buildConfig({
       KAFKA_PROVIDER: "msk",
       MSK_REGION: "eu-central-1",
@@ -31,13 +31,15 @@ describe("msk provider validation", () => {
     expect(cfg.kafka.msk.authMode).toBe("iam");
   });
 
-  it("accepts msk with region + brokers (no ARN needed)", () => {
+  it("accepts msk with region + KAFKA_BROKERS (no ARN needed)", () => {
     const cfg = buildConfig({
       KAFKA_PROVIDER: "msk",
       MSK_REGION: "eu-central-1",
-      MSK_BROKERS: "b-1.example.kafka-serverless.eu-central-1.amazonaws.com:9098",
+      KAFKA_BROKERS: "b-1.example.kafka-serverless.eu-central-1.amazonaws.com:9098",
     });
-    expect(cfg.kafka.msk.brokers).toContain("b-1.example");
+    expect(cfg.kafka.brokers).toEqual([
+      "b-1.example.kafka-serverless.eu-central-1.amazonaws.com:9098",
+    ]);
   });
 
   it("rejects msk without region", () => {
@@ -46,16 +48,7 @@ describe("msk provider validation", () => {
         KAFKA_PROVIDER: "msk",
         MSK_CLUSTER_ARN: "arn:aws:kafka:eu-central-1:123:cluster/x/u",
       }),
-    ).toThrow(/msk\.region is required when provider=msk/);
-  });
-
-  it("rejects msk without brokers or arn", () => {
-    expect(() =>
-      buildConfig({
-        KAFKA_PROVIDER: "msk",
-        MSK_REGION: "eu-central-1",
-      }),
-    ).toThrow(/msk requires either clusterArn or brokers/);
+    ).toThrow(/MSK_REGION is required when provider=msk/);
   });
 
   it("rejects an invalid authMode", () => {
@@ -63,7 +56,7 @@ describe("msk provider validation", () => {
       buildConfig({
         KAFKA_PROVIDER: "msk",
         MSK_REGION: "eu-central-1",
-        MSK_BROKERS: "b:9098",
+        KAFKA_BROKERS: "b:9098",
         MSK_AUTH_MODE: "bogus",
       }),
     ).toThrow();
@@ -74,35 +67,29 @@ describe("confluent provider validation", () => {
   beforeEach(() => resetConfigCache());
   afterEach(() => resetConfigCache());
 
-  it("accepts confluent with the full triplet", () => {
+  it("accepts confluent with KAFKA_BROKERS + api credentials", () => {
     const cfg = buildConfig({
       KAFKA_PROVIDER: "confluent",
-      CONFLUENT_BOOTSTRAP_SERVERS: "pkc-1.eu-central-1.aws.confluent.cloud:9092",
+      KAFKA_BROKERS: "pkc-1.eu-central-1.aws.confluent.cloud:9092",
       CONFLUENT_API_KEY: "key",
       CONFLUENT_API_SECRET: "secret",
     });
     expect(cfg.kafka.provider).toBe("confluent");
+    expect(cfg.kafka.brokers).toEqual([
+      "pkc-1.eu-central-1.aws.confluent.cloud:9092",
+    ]);
   });
 
   it("rejects confluent without apiKey", () => {
     expect(() =>
       buildConfig({
         KAFKA_PROVIDER: "confluent",
-        CONFLUENT_BOOTSTRAP_SERVERS: "pkc-1:9092",
+        KAFKA_BROKERS: "pkc-1:9092",
         CONFLUENT_API_SECRET: "secret",
       }),
     ).toThrow(/confluent\.apiKey is required/);
   });
 
-  it("rejects confluent without bootstrapServers", () => {
-    expect(() =>
-      buildConfig({
-        KAFKA_PROVIDER: "confluent",
-        CONFLUENT_API_KEY: "key",
-        CONFLUENT_API_SECRET: "secret",
-      }),
-    ).toThrow(/confluent\.bootstrapServers is required/);
-  });
 });
 
 describe("prod-safety rule", () => {
@@ -120,7 +107,7 @@ describe("prod-safety rule", () => {
       ENVIRONMENT: "prod",
       KAFKA_PROVIDER: "msk",
       MSK_REGION: "eu-central-1",
-      MSK_BROKERS: "b-1.example.kafka-serverless.eu-central-1.amazonaws.com:9098",
+      KAFKA_BROKERS: "b-1.example.kafka-serverless.eu-central-1.amazonaws.com:9098",
     });
     expect(cfg.app.environment).toBe("prod");
     expect(cfg.kafka.provider).toBe("msk");

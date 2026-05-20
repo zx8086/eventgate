@@ -9,7 +9,7 @@ import { configSchema, type AppConfig } from "./schemas.ts";
 //   - Arrays replace (override array wins wholesale; no concat, no per-index
 //     merge). This is the right semantic for every array field we have:
 //     `routes` (operator override replaces seed) and
-//     `kafka.local.bootstrapServers` (operator CSV replaces default
+//     `kafka.brokers` (operator CSV replaces default
 //     "localhost:9092"). If a future array field needs append semantics, it
 //     belongs in its own resolution step, not in this generic merger.
 //   - `undefined` overrides are ignored so defaults survive.

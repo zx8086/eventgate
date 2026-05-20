@@ -50,7 +50,7 @@ describe("MskKafkaProvider.getConnectionConfig", () => {
   afterEach(() => resetConfigCache());
 
   it("returns plaintext config for authMode=none", async () => {
-    const provider = new MskKafkaProvider("b-1:9092", "", "eu-central-1", "cid", "none", true);
+    const provider = new MskKafkaProvider(["b-1:9092"], "", "eu-central-1", "cid", "none", true);
     const conn = await provider.getConnectionConfig();
     expect(conn.bootstrapBrokers).toEqual(["b-1:9092"]);
     expect(conn.sasl).toBeUndefined();
@@ -58,14 +58,14 @@ describe("MskKafkaProvider.getConnectionConfig", () => {
   });
 
   it("returns TLS-only config for authMode=tls", async () => {
-    const provider = new MskKafkaProvider("b-1:9094", "", "eu-central-1", "cid", "tls", true);
+    const provider = new MskKafkaProvider(["b-1:9094"], "", "eu-central-1", "cid", "tls", true);
     const conn = await provider.getConnectionConfig();
     expect(conn.tls).toEqual({ rejectUnauthorized: true });
     expect(conn.sasl).toBeUndefined();
   });
 
   it("returns OAUTHBEARER SASL + TLS + generous timeouts for authMode=iam", async () => {
-    const provider = new MskKafkaProvider("b-1:9098", "", "eu-central-1", "cid", "iam", true);
+    const provider = new MskKafkaProvider(["b-1:9098"], "", "eu-central-1", "cid", "iam", true);
     const conn = await provider.getConnectionConfig();
     expect(conn.sasl?.mechanism).toBe("OAUTHBEARER");
     expect(typeof conn.sasl?.token).toBe("function");
@@ -75,7 +75,7 @@ describe("MskKafkaProvider.getConnectionConfig", () => {
   });
 
   it("throws PROVIDER_CONFIG_INVALID when brokers and clusterArn are both empty", async () => {
-    const provider = new MskKafkaProvider("", "", "eu-central-1", "cid", "iam", true);
+    const provider = new MskKafkaProvider([], "", "eu-central-1", "cid", "iam", true);
     await expect(provider.getConnectionConfig()).rejects.toMatchObject({
       name: "KafkaProviderError",
       code: "PROVIDER_CONFIG_INVALID",
@@ -101,7 +101,7 @@ describe("MSK IAM token caching", () => {
   });
 
   it("caches the token across calls until the 60s safety margin trips", async () => {
-    const provider = new MskKafkaProvider("b-1:9098", "", "eu-central-1", "cid", "iam", true);
+    const provider = new MskKafkaProvider(["b-1:9098"], "", "eu-central-1", "cid", "iam", true);
     const conn = await provider.getConnectionConfig();
     const tokenFn = conn.sasl?.token;
     if (typeof tokenFn !== "function") throw new Error("expected token function");
@@ -116,7 +116,7 @@ describe("MSK IAM token caching", () => {
     nextExpiry = Date.now() + 30_000;
     nextToken = "token-B";
     // Manually invalidate cache by setting a near-expiry first
-    const provider2 = new MskKafkaProvider("b-1:9098", "", "eu-central-1", "cid", "iam", true);
+    const provider2 = new MskKafkaProvider(["b-1:9098"], "", "eu-central-1", "cid", "iam", true);
     const conn2 = await provider2.getConnectionConfig();
     const tokenFn2 = conn2.sasl?.token;
     if (typeof tokenFn2 !== "function") throw new Error("expected token function");
@@ -135,7 +135,7 @@ describe("MSK IAM token caching", () => {
         throw new Error("STS denied");
       },
     }));
-    const provider = new MskKafkaProvider("b-1:9098", "", "eu-central-1", "cid", "iam", true);
+    const provider = new MskKafkaProvider(["b-1:9098"], "", "eu-central-1", "cid", "iam", true);
     const conn = await provider.getConnectionConfig();
     const tokenFn = conn.sasl?.token;
     if (typeof tokenFn !== "function") throw new Error("expected token function");

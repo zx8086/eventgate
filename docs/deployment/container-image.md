@@ -121,7 +121,7 @@ Expected: `65532:65532 ["/usr/bin/dumb-init","--"] ["/usr/local/bin/bun","src/ga
 Smoke-test the gateway directly:
 
 ```bash
-docker run --rm -p 3000:3000 -e KAFKA_PROVIDER=local -e KAFKA_LOCAL_BOOTSTRAP_SERVERS=invalid:9092 eventgate:local &
+docker run --rm -p 3000:3000 -e KAFKA_PROVIDER=local -e KAFKA_BROKERS=invalid:9092 eventgate:local &
 curl -i http://localhost:3000/healthz
 ```
 

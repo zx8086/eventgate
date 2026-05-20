@@ -38,10 +38,10 @@ export class MskKafkaProvider implements KafkaProvider {
   readonly type = "msk" as const;
   readonly name: string;
   private cachedToken: CachedToken | null = null;
-  private resolvedBrokers: string | null = null;
+  private resolvedBrokers: string[] | null = null;
 
   constructor(
-    private readonly bootstrapBrokers: string,
+    private readonly bootstrapBrokers: string[],
     private readonly clusterArn: string,
     private readonly region: string,
     private readonly clientId: string,
@@ -58,8 +58,7 @@ export class MskKafkaProvider implements KafkaProvider {
   }
 
   async getConnectionConfig(): Promise<KafkaConnectionConfig> {
-    const brokers = await this.resolveBrokers();
-    const bootstrapBrokers = brokers.split(",").map((s) => s.trim()).filter(Boolean);
+    const bootstrapBrokers = await this.resolveBrokers();
 
     if (this.authMode === "none") {
       return { clientId: this.clientId, bootstrapBrokers };
@@ -111,13 +110,13 @@ export class MskKafkaProvider implements KafkaProvider {
     }
   }
 
-  private async resolveBrokers(): Promise<string> {
-    if (this.bootstrapBrokers) return this.bootstrapBrokers;
+  private async resolveBrokers(): Promise<string[]> {
+    if (this.bootstrapBrokers.length > 0) return this.bootstrapBrokers;
     if (this.resolvedBrokers) return this.resolvedBrokers;
 
     if (!this.clusterArn) {
       throw new KafkaProviderError(
-        "MSK provider requires either bootstrapBrokers or clusterArn",
+        "MSK provider requires either KAFKA_BROKERS or MSK_CLUSTER_ARN",
         "PROVIDER_CONFIG_INVALID",
         "msk",
       );
@@ -128,14 +127,15 @@ export class MskKafkaProvider implements KafkaProvider {
     const response = await client.send(
       new GetBootstrapBrokersCommand({ ClusterArn: this.clusterArn }),
     );
-    const brokers = pickBrokerString(response as BootstrapBrokersResponse, this.authMode);
-    if (!brokers) {
+    const brokerString = pickBrokerString(response as BootstrapBrokersResponse, this.authMode);
+    if (!brokerString) {
       throw new KafkaProviderError(
         `No bootstrap brokers found for MSK cluster (authMode=${this.authMode})`,
         "PROVIDER_CONFIG_INVALID",
         "msk",
       );
     }
+    const brokers = brokerString.split(",").map((s) => s.trim()).filter(Boolean);
     this.resolvedBrokers = brokers;
     return brokers;
   }

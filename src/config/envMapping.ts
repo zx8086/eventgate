@@ -7,9 +7,9 @@ export type EnvOverrides = {
   kafka?: {
     provider?: string;
     clientId?: string;
-    local?: { bootstrapServers?: string[] };
-    msk?: { region?: string; clusterArn?: string; brokers?: string; authMode?: string };
-    confluent?: { bootstrapServers?: string; apiKey?: string; apiSecret?: string };
+    brokers?: string[];
+    msk?: { region?: string; clusterArn?: string; authMode?: string };
+    confluent?: { apiKey?: string; apiSecret?: string };
   };
   observability?: { logLevel?: string };
   outbox?: {
@@ -95,17 +95,13 @@ export function mapEnv(env: RawEnv): EnvOverrides {
     kafka: filterUndefined({
       provider: str(env.KAFKA_PROVIDER),
       clientId: str(env.KAFKA_CLIENT_ID),
-      local: nestedOrUndefined({
-        bootstrapServers: csv(env.KAFKA_LOCAL_BOOTSTRAP_SERVERS),
-      }),
+      brokers: csv(env.KAFKA_BROKERS),
       msk: nestedOrUndefined({
         region: str(env.MSK_REGION),
         clusterArn: str(env.MSK_CLUSTER_ARN),
-        brokers: str(env.MSK_BROKERS),
         authMode: str(env.MSK_AUTH_MODE),
       }),
       confluent: nestedOrUndefined({
-        bootstrapServers: str(env.CONFLUENT_BOOTSTRAP_SERVERS),
         apiKey: str(env.CONFLUENT_API_KEY),
         apiSecret: str(env.CONFLUENT_API_SECRET),
       }),

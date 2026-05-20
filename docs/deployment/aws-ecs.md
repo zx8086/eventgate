@@ -88,11 +88,12 @@ The task definition injects:
 ENVIRONMENT=prod
 KAFKA_PROVIDER=msk
 KAFKA_CLIENT_ID=eventgate-gateway
+KAFKA_BROKERS=<csv>             # optional when MSK_CLUSTER_ARN is set (discovery fills it)
 MSK_REGION=<aws-region>
 MSK_AUTH_MODE=iam
-MSK_CLUSTER_ARN=<arn>          # or MSK_BROKERS=<csv>
+MSK_CLUSTER_ARN=<arn>           # required when KAFKA_BROKERS is empty
 OUTBOX_DB_PATH=/data/outbox.db
-ROUTES_JSON=[ ... ]            # see "Routes" section below
+ROUTES_JSON=[ ... ]             # see "Routes" section below
 LOG_LEVEL=info
 ```
 
@@ -102,9 +103,9 @@ Or for Confluent Cloud (alternative):
 ENVIRONMENT=prod
 KAFKA_PROVIDER=confluent
 KAFKA_CLIENT_ID=eventgate-gateway
-CONFLUENT_BOOTSTRAP_SERVERS=<host:port>
+KAFKA_BROKERS=<host:port[,host:port]>
 OUTBOX_DB_PATH=/data/outbox.db
-ROUTES_JSON=[ ... ]            # see "Routes" section below
+ROUTES_JSON=[ ... ]             # see "Routes" section below
 LOG_LEVEL=info
 ```
 

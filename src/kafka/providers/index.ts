@@ -21,11 +21,11 @@ export function createKafkaProvider(
 
   switch (kafka.provider) {
     case "local":
-      return new LocalKafkaProvider(kafka.local.bootstrapServers, kafka.clientId);
+      return new LocalKafkaProvider(kafka.brokers, kafka.clientId);
 
     case "confluent":
       return new ConfluentKafkaProvider(
-        kafka.confluent.bootstrapServers,
+        kafka.brokers,
         kafka.confluent.apiKey,
         kafka.confluent.apiSecret,
         kafka.clientId,
@@ -33,7 +33,7 @@ export function createKafkaProvider(
 
     case "msk":
       return new MskKafkaProvider(
-        kafka.msk.brokers,
+        kafka.brokers,
         kafka.msk.clusterArn,
         kafka.msk.region,
         kafka.clientId,

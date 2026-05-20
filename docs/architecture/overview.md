@@ -168,8 +168,8 @@ See [kafka-provider-factory.md](kafka-provider-factory.md) for env vars, field r
 Configuration follows the 4-pillar pattern — defaults, env mapping, schema, loader — and is documented in [../configuration/environment-variables.md](../configuration/environment-variables.md). Routes have their own three-source resolution layered on top (file > env > defaults). Production safety rules are enforced by `.superRefine()` in `src/config/schemas.ts`:
 
 - `provider=local` is rejected when `ENVIRONMENT=prod` (prod must use `msk` or `confluent`).
-- `msk` requires `MSK_REGION` plus one of `MSK_CLUSTER_ARN` / `MSK_BROKERS`.
-- `confluent` requires `CONFLUENT_BOOTSTRAP_SERVERS`, `CONFLUENT_API_KEY`, `CONFLUENT_API_SECRET`.
+- `msk` requires `MSK_REGION` plus one of `KAFKA_BROKERS` / `MSK_CLUSTER_ARN`.
+- `confluent` requires `KAFKA_BROKERS`, `CONFLUENT_API_KEY`, `CONFLUENT_API_SECRET`.
 - `routes` must be non-empty; each route must satisfy the naming policy, uniqueness, reserved-path, and idempotency-strategy rules.
 - `admin.token`, when present, must be ≥ 32 characters.
 
