@@ -171,11 +171,6 @@ export const configSchema = z
         .enum(["local", "msk", "confluent"])
         .describe("Which Kafka backend to connect to. Selected by KAFKA_PROVIDER."),
       clientId: z.string().min(1).describe("Kafka client id used by the producer."),
-      topics: z.strictObject({
-        raw: z.string().min(1),
-        events: z.string().min(1),
-        dlq: z.string().min(1),
-      }),
       local: localSchema,
       msk: mskSchema,
       confluent: confluentSchema,

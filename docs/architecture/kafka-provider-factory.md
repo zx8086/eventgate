@@ -49,9 +49,6 @@ Two extra rules:
 |----------|-----------|---------|
 | `KAFKA_PROVIDER` | all | `local` \| `msk` \| `confluent`. Default `local`. |
 | `KAFKA_CLIENT_ID` | all | Producer client id. Default `eventgate-gateway`. |
-| `KAFKA_TOPIC_RAW` | all | Raw webhook topic. |
-| `KAFKA_TOPIC_EVENTS` | all | Normalized events topic. |
-| `KAFKA_TOPIC_DLQ` | all | DLQ topic. |
 | `KAFKA_LOCAL_BOOTSTRAP_SERVERS` | `local` | CSV bootstrap brokers. Default `localhost:9092`. |
 | `MSK_REGION` | `msk` | AWS region of the MSK cluster. |
 | `MSK_CLUSTER_ARN` | `msk` | Cluster ARN; brokers discovered via `GetBootstrapBrokersCommand`. |

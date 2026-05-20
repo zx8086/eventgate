@@ -7,7 +7,6 @@ export type EnvOverrides = {
   kafka?: {
     provider?: string;
     clientId?: string;
-    topics?: { raw?: string; events?: string; dlq?: string };
     local?: { bootstrapServers?: string[] };
     msk?: { region?: string; clusterArn?: string; brokers?: string; authMode?: string };
     confluent?: { bootstrapServers?: string; apiKey?: string; apiSecret?: string };
@@ -96,11 +95,6 @@ export function mapEnv(env: RawEnv): EnvOverrides {
     kafka: filterUndefined({
       provider: str(env.KAFKA_PROVIDER),
       clientId: str(env.KAFKA_CLIENT_ID),
-      topics: nestedOrUndefined({
-        raw: str(env.KAFKA_TOPIC_RAW),
-        events: str(env.KAFKA_TOPIC_EVENTS),
-        dlq: str(env.KAFKA_TOPIC_DLQ),
-      }),
       local: nestedOrUndefined({
         bootstrapServers: csv(env.KAFKA_LOCAL_BOOTSTRAP_SERVERS),
       }),

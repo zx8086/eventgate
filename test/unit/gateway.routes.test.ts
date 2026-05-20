@@ -7,7 +7,6 @@ import type { OutboxWriter, EnqueueInput, BacklogStats } from "../../src/outbox/
 
 function fakeProducer(): EventProducer {
   return {
-    publishRaw: async () => {},
     sendByTopic: async () => {},
     isConnected: () => true,
     disconnect: async () => {},

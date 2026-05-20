@@ -1,10 +1,8 @@
 // src/kafka/producer.ts
 import { Producer, stringSerializers } from "@platformatic/kafka";
-import { config } from "../config/index.ts";
 import type { KafkaProvider } from "./providers/index.ts";
 
 export type EventProducer = {
-  publishRaw(resourceId: string, raw: unknown): Promise<void>;
   sendByTopic(
     topic: string,
     key: string,
@@ -39,20 +37,6 @@ export async function createProducer(
     async disconnect() {
       connected = false;
       await producer.close();
-    },
-    async publishRaw(resourceId, raw) {
-      await producer.send({
-        messages: [
-          {
-            topic: config.kafka.topics.raw,
-            key: resourceId,
-            value: JSON.stringify({
-              receivedAt: new Date().toISOString(),
-              raw,
-            }),
-          },
-        ],
-      });
     },
     async sendByTopic(topic, key, value, headers) {
       await producer.send({

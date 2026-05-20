@@ -8,7 +8,7 @@ import { resolveIdempotencyStrategy } from "./idempotencyStrategies.ts";
 const log = getLogger("gateway.handler");
 
 export type HandlerDeps = {
-  producer: Pick<EventProducer, "publishRaw">;
+  producer: Pick<EventProducer, "sendByTopic">;
   outbox?: Pick<OutboxWriter, "enqueue">;
 };
 
@@ -43,11 +43,12 @@ export function makeWebhookHandler(route: RouteConfig, deps: HandlerDeps) {
     const headers: Record<string, string> = { source: sourceHeader };
     if (idempotencyKey) headers.idempotencyKey = idempotencyKey;
 
+    const payload = JSON.stringify({
+      receivedAt: new Date().toISOString(),
+      raw: body,
+    });
+
     if (outbox) {
-      const payload = JSON.stringify({
-        receivedAt: new Date().toISOString(),
-        raw: body,
-      });
       try {
         outbox.enqueue({
           topic: route.topic,
@@ -67,7 +68,7 @@ export function makeWebhookHandler(route: RouteConfig, deps: HandlerDeps) {
       }
     } else {
       try {
-        await producer.publishRaw(messageKey, body);
+        await producer.sendByTopic(route.topic, messageKey, payload, headers);
       } catch (err) {
         log.warn(
           { err, route: route.name, topic: route.topic, messageKey },

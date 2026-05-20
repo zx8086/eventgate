@@ -4,7 +4,6 @@ import { resetConfigCache } from "../../src/config/loader.ts";
 import { buildRoutes } from "../../src/gateway/routes.ts";
 
 const noopProducer = {
-  publishRaw: async () => {},
   isConnected: () => true,
   disconnect: async () => {},
   sendByTopic: async () => {},
