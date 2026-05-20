@@ -1,6 +1,7 @@
 // src/config/schemas.ts
 import { z } from "zod";
 import { checkGatewayTopic, expectedDlqTopic } from "./topicPolicy.ts";
+import { checkReservedPath } from "./reservedPaths.ts";
 import { knownIdempotencyStrategy } from "../gateway/idempotencyStrategies.ts";
 
 const localSchema = z.strictObject({
@@ -80,6 +81,15 @@ export const routesSchema = z
           code: "custom",
           path: [i, "topic"],
           message: topicCheck.message,
+        });
+      }
+
+      const reservedCheck = checkReservedPath(r.path);
+      if (!reservedCheck.ok) {
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "path"],
+          message: reservedCheck.message,
         });
       }
 
