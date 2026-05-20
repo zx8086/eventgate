@@ -329,3 +329,7 @@ The pre-existing `config.kafka.topics.{raw, events, dlq}` defaults become unused
 - All new and adapted unit tests pass; `bun run typecheck` is clean.
 - A two-route smoke test against local Redpanda demonstrates traffic landing on both topics with the expected headers.
 - Downstream consumers of the Elastic AutoOps stream are migrated to the new topic name before the gateway deploy.
+
+## Field-set hardening (2026-05-20, SIO-810)
+
+When this design landed, three route fields were marked optional: `dlqTopic`, `sourceHeader`, and `idempotency`. With multi-source onboarding now real, every field has become mandatory. The `config.routes[]` shape is `{name, path, topic, dlqTopic, sourceHeader, keyFields, idempotency}` — no optional fields. Operators get a clear Zod error at startup if any field is missing. Adding a new vendor now requires registering an idempotency strategy in `src/gateway/idempotencyStrategies.ts` before the route can be accepted.

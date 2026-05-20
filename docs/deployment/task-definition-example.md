@@ -56,7 +56,7 @@ The Fargate shape is: **one task definition, one service, one EBS volume per tas
         { "name": "OUTBOX_DB_PATH",  "value": "/data/outbox.db" },
         {
           "name": "ROUTES_JSON",
-          "value": "[{\"name\":\"elastic-autoops\",\"path\":\"/webhooks/elastic/autoops\",\"topic\":\"T_PRIVATE_SOURCE_ELASTIC_AUTOOPS\",\"dlqTopic\":\"DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS\",\"keyFields\":[\"resourceId\",\"deployment-id\"],\"idempotency\":\"elastic-autoops\"}]"
+          "value": "[{\"name\":\"elastic-autoops\",\"path\":\"/webhooks/elastic/autoops\",\"topic\":\"T_PRIVATE_SOURCE_ELASTIC_AUTOOPS\",\"dlqTopic\":\"DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS\",\"sourceHeader\":\"elastic-autoops\",\"keyFields\":[\"resourceId\",\"deployment-id\"],\"idempotency\":\"elastic-autoops\"}]"
         }
       ],
       "secrets": [],
@@ -93,16 +93,14 @@ Key points:
 - `ROUTES_JSON` is a single escaped JSON string on one line; multi-line examples in [aws-ecs.md](aws-ecs.md) collapse to this form in raw JSON. CloudFormation and Terraform variants below avoid the manual escaping.
 - `KAFKA_BROKERS` is omitted in this MSK example. With `MSK_CLUSTER_ARN` set, the provider calls `GetBootstrapBrokersCommand` at startup and resolves brokers automatically. To skip discovery (e.g. for stable broker pinning), set `KAFKA_BROKERS=b-1.foo.kafka-serverless.eu-central-1.amazonaws.com:9098,b-2...:9098` and the discovery call is bypassed.
 
-## Multi-vendor `ROUTES_JSON`
+## Adding a new vendor
 
-Same task definition; only the `ROUTES_JSON` env entry changes:
+Onboarding a new source (Datadog alerts, GitHub webhooks, PagerDuty incidents, etc.) requires two things:
 
-```json
-{
-  "name": "ROUTES_JSON",
-  "value": "[{\"name\":\"elastic-autoops\",\"path\":\"/webhooks/elastic/autoops\",\"topic\":\"T_PRIVATE_SOURCE_ELASTIC_AUTOOPS\",\"dlqTopic\":\"DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS\",\"keyFields\":[\"resourceId\",\"deployment-id\"],\"idempotency\":\"elastic-autoops\"},{\"name\":\"datadog-alerts\",\"path\":\"/webhooks/datadog/alerts\",\"topic\":\"T_PRIVATE_SOURCE_DATADOG_ALERTS\",\"dlqTopic\":\"DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS\",\"keyFields\":[\"alert_id\"]},{\"name\":\"github-webhooks\",\"path\":\"/webhooks/github/events\",\"topic\":\"T_PRIVATE_SOURCE_GITHUB_EVENTS\",\"dlqTopic\":\"DLQ_T_PRIVATE_SOURCE_GITHUB_EVENTS\",\"keyFields\":[\"repository.full_name\",\"delivery\"]}]"
-}
-```
+1. **A registered idempotency strategy** in `src/gateway/idempotencyStrategies.ts`. The strategy is a function `(body: unknown) => string | undefined` that computes the dedup key. Today only `elastic-autoops` ships; new strategies are a small code change reviewed in a PR.
+2. **A new route appended to `ROUTES_JSON`** with the new strategy name. Every route field is mandatory — no optional fields.
+
+Schema validation runs at startup. Routes with an unknown `idempotency` name, a wrong `dlqTopic` shape, a duplicate path, or any missing field fail Zod and crash the task; ECS rolls back automatically. Multi-vendor `ROUTES_JSON` examples are deliberately not shipped in these docs until the matching strategies exist in the registry — they would otherwise document an invalid configuration.
 
 ## Confluent Cloud Variant
 
@@ -208,7 +206,7 @@ ContainerDefinitions:
       - { Name: OUTBOX_DB_PATH,  Value: /data/outbox.db }
       - Name: ROUTES_JSON
         Value: !Sub |-
-          [{"name":"elastic-autoops","path":"/webhooks/elastic/autoops","topic":"T_PRIVATE_SOURCE_ELASTIC_AUTOOPS","dlqTopic":"DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS","keyFields":["resourceId","deployment-id"],"idempotency":"elastic-autoops"}]
+          [{"name":"elastic-autoops","path":"/webhooks/elastic/autoops","topic":"T_PRIVATE_SOURCE_ELASTIC_AUTOOPS","dlqTopic":"DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS","sourceHeader":"elastic-autoops","keyFields":["resourceId","deployment-id"],"idempotency":"elastic-autoops"}]
     MountPoints:
       - SourceVolume: outbox-data
         ContainerPath: /data
@@ -217,11 +215,11 @@ ContainerDefinitions:
       - { ContainerPort: 3000, Protocol: tcp }
 ```
 
-For multi-vendor routes in CloudFormation, store the JSON in a `String` parameter or `Mappings` block to keep templates diff-friendly.
+When onboarding additional vendors, store the routes in a `String` parameter or `Mappings` block to keep templates diff-friendly — and only after adding the matching idempotency strategies to `src/gateway/idempotencyStrategies.ts` so Zod accepts the new route names.
 
 ## Terraform Equivalent
 
-Terraform's `jsonencode()` produces clean, diff-friendly output from a typed list variable. New vendor = new entry in `var.routes`; `terraform apply` produces a new task definition revision.
+Terraform's `jsonencode()` produces clean, diff-friendly output from a typed list variable. New vendor = new entry in `var.routes` (after the corresponding idempotency strategy is registered in code); `terraform apply` produces a new task definition revision.
 
 ```hcl
 resource "aws_ecs_task_definition" "gateway" {
@@ -282,21 +280,23 @@ resource "aws_ecs_task_definition" "gateway" {
 
 variable "routes" {
   type = list(object({
-    name        = string
-    path        = string
-    topic       = string
-    dlqTopic    = optional(string)
-    keyFields   = list(string)
-    idempotency = optional(string)
+    name         = string
+    path         = string
+    topic        = string
+    dlqTopic     = string
+    sourceHeader = string
+    keyFields    = list(string)
+    idempotency  = string
   }))
   default = [
     {
-      name        = "elastic-autoops"
-      path        = "/webhooks/elastic/autoops"
-      topic       = "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS"
-      dlqTopic    = "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS"
-      keyFields   = ["resourceId", "deployment-id"]
-      idempotency = "elastic-autoops"
+      name         = "elastic-autoops"
+      path         = "/webhooks/elastic/autoops"
+      topic        = "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS"
+      dlqTopic     = "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS"
+      sourceHeader = "elastic-autoops"
+      keyFields    = ["resourceId", "deployment-id"]
+      idempotency  = "elastic-autoops"
     }
   ]
 }

@@ -24,7 +24,7 @@ function pickKey(body: unknown, fields: readonly string[]): string {
 
 export function makeWebhookHandler(route: RouteConfig, deps: HandlerDeps) {
   const { producer, outbox } = deps;
-  const sourceHeader = route.sourceHeader ?? route.name;
+  const sourceHeader = route.sourceHeader;
   const strategy = resolveIdempotencyStrategy(route.idempotency);
 
   return async function handler(req: Request): Promise<Response> {

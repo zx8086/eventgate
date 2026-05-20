@@ -6,12 +6,14 @@ const validRoute: RouteConfig = {
   name: "elastic-autoops",
   path: "/webhooks/elastic/autoops",
   topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+  dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+  sourceHeader: "elastic-autoops",
   keyFields: ["resourceId", "deployment-id"],
   idempotency: "elastic-autoops",
 };
 
 describe("routesSchema basics", () => {
-  it("accepts a minimal valid route", () => {
+  it("accepts a fully-specified valid route", () => {
     const r = routesSchema.safeParse([validRoute]);
     expect(r.success).toBe(true);
   });
@@ -42,7 +44,12 @@ describe("routesSchema basics", () => {
   it("rejects duplicate paths across routes", () => {
     const r = routesSchema.safeParse([
       validRoute,
-      { ...validRoute, name: "second", topic: "T_PRIVATE_SOURCE_OTHER_THING" },
+      {
+        ...validRoute,
+        name: "second",
+        topic: "T_PRIVATE_SOURCE_OTHER_THING",
+        dlqTopic: "DLQ_T_PRIVATE_SOURCE_OTHER_THING",
+      },
     ]);
     expect(r.success).toBe(false);
     if (!r.success) {
@@ -61,14 +68,21 @@ describe("routesSchema basics", () => {
     }
   });
 
-  it("accepts an absent idempotency field", () => {
-    const { idempotency: _omit, ...withoutIdem } = validRoute;
-    const r = routesSchema.safeParse([withoutIdem]);
-    expect(r.success).toBe(true);
+  it("rejects a route missing dlqTopic", () => {
+    const { dlqTopic: _omit, ...withoutDlq } = validRoute;
+    const r = routesSchema.safeParse([withoutDlq]);
+    expect(r.success).toBe(false);
   });
 
-  it("accepts an absent dlqTopic", () => {
-    const r = routesSchema.safeParse([validRoute]);
-    expect(r.success).toBe(true);
+  it("rejects a route missing sourceHeader", () => {
+    const { sourceHeader: _omit, ...withoutSource } = validRoute;
+    const r = routesSchema.safeParse([withoutSource]);
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects a route missing idempotency", () => {
+    const { idempotency: _omit, ...withoutIdem } = validRoute;
+    const r = routesSchema.safeParse([withoutIdem]);
+    expect(r.success).toBe(false);
   });
 });

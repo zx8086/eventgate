@@ -6,7 +6,10 @@ const base: RouteConfig = {
   name: "elastic-autoops",
   path: "/webhooks/elastic/autoops",
   topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+  dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+  sourceHeader: "elastic-autoops",
   keyFields: ["resourceId"],
+  idempotency: "elastic-autoops",
 };
 
 describe("topic naming policy enforced by routesSchema", () => {
@@ -88,13 +91,15 @@ describe("dlqTopic rule", () => {
 
   it("rejects duplicate dlqTopic across routes (defensive)", () => {
     const r = routesSchema.safeParse([
-      { ...base, dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS" },
+      base,
       {
         name: "second",
         path: "/webhooks/elastic/autoops-2",
         topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS_TWO",
-        keyFields: ["x"],
         dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+        sourceHeader: "second",
+        keyFields: ["x"],
+        idempotency: "elastic-autoops",
       },
     ]);
     expect(r.success).toBe(false);

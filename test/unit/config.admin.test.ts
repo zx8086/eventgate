@@ -46,7 +46,15 @@ describe("config.routesFile", () => {
     writeFileSync(
       path,
       JSON.stringify([
-        { name: "test-route", path: "/webhooks/test", topic: "T_PRIVATE_SOURCE_TEST_X", keyFields: ["id"] },
+        {
+          name: "test-route",
+          path: "/webhooks/test",
+          topic: "T_PRIVATE_SOURCE_TEST_X",
+          dlqTopic: "DLQ_T_PRIVATE_SOURCE_TEST_X",
+          sourceHeader: "test-route",
+          keyFields: ["id"],
+          idempotency: "elastic-autoops",
+        },
       ]),
     );
     const cfg = buildConfig({ ...baseEnv, ROUTES_FILE: path });
