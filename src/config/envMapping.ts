@@ -2,7 +2,7 @@
 type RawEnv = NodeJS.ProcessEnv;
 
 export type EnvOverrides = {
-  app?: { environment?: string; tenant?: string };
+  app?: { environment?: string };
   server?: { port?: number };
   kafka?: {
     provider?: string;
@@ -89,7 +89,6 @@ export function mapEnv(env: RawEnv): EnvOverrides {
   const overrides: EnvOverrides = {
     app: filterUndefined({
       environment: str(env.ENVIRONMENT),
-      tenant: str(env.TENANT),
     }),
     server: filterUndefined({
       port: num(env.PORT),

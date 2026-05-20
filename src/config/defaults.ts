@@ -6,7 +6,6 @@ export const defaults = {
     name: pkg.name,
     version: pkg.version,
     environment: "dev",
-    tenant: "elastic-cloud",
   },
   server: {
     port: 3000,
