@@ -55,9 +55,7 @@ if (config.outbox.enabled) {
 const drainMetrics = createDrainMetrics();
 
 const healthAdmin = await createHealthAdmin(provider);
-const expectedTopics = config.routes.flatMap((r) =>
-  r.dlqTopic ? [r.topic, r.dlqTopic] : [r.topic],
-);
+const expectedTopics = config.routes.flatMap((r) => [r.topic, r.dlqTopic]);
 const monitor = createHealthMonitor({
   producer,
   outboxDb,
