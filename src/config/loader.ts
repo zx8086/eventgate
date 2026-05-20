@@ -4,6 +4,15 @@ import { defaults } from "./defaults.ts";
 import { mapEnv, type EnvOverrides } from "./envMapping.ts";
 import { configSchema, type AppConfig } from "./schemas.ts";
 
+// Merge rules:
+//   - Plain objects recurse (deep merge per key).
+//   - Arrays replace (override array wins wholesale; no concat, no per-index
+//     merge). This is the right semantic for every array field we have:
+//     `routes` (operator override replaces seed) and
+//     `kafka.local.bootstrapServers` (operator CSV replaces default
+//     "localhost:9092"). If a future array field needs append semantics, it
+//     belongs in its own resolution step, not in this generic merger.
+//   - `undefined` overrides are ignored so defaults survive.
 function mergeDeep<T extends object>(base: T, overrides: unknown): T {
   if (!overrides || typeof overrides !== "object") return base;
   const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
@@ -28,31 +37,23 @@ function mergeDeep<T extends object>(base: T, overrides: unknown): T {
 export function buildConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const overrides: EnvOverrides = mapEnv(env);
 
-  // `routes` resolution: file > env > defaults. Pull `routes` and `routesFile`
-  // out of overrides; merge the rest; then attach the resolved routes.
-  const { routes: routesOverride, routesFile, ...rest } = overrides;
-  const merged = mergeDeep(defaults as unknown as AppConfig, rest);
-
-  let resolvedRoutes: unknown = (defaults as unknown as AppConfig).routes;
-  if (routesFile !== undefined) {
-    // File source — fail fast on read / parse / shape errors.
-    const raw = readFileSync(routesFile, "utf8");
+  // ROUTES_FILE is the only field whose source is the filesystem rather than
+  // an env var or default. Resolve it into `overrides.routes` before merge so
+  // routes then flow through `mergeDeep` like every other field. Precedence
+  // remains ROUTES_FILE > ROUTES_JSON > defaults because the file read
+  // overwrites whatever `mapEnv` placed in `overrides.routes`.
+  if (overrides.routesFile !== undefined) {
+    const raw = readFileSync(overrides.routesFile, "utf8");
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      throw new Error(`ROUTES_FILE ${routesFile} must contain a JSON array`);
+      throw new Error(`ROUTES_FILE ${overrides.routesFile} must contain a JSON array`);
     }
-    resolvedRoutes = parsed;
-  } else if (routesOverride !== undefined) {
-    resolvedRoutes = routesOverride;
+    overrides.routes = parsed;
   }
 
-  const withRoutes: AppConfig = {
-    ...merged,
-    routesFile,
-    routes: resolvedRoutes as AppConfig["routes"],
-  };
+  const merged = mergeDeep(defaults as unknown as AppConfig, overrides);
 
-  const result = configSchema.safeParse(withRoutes);
+  const result = configSchema.safeParse(merged);
   if (!result.success) {
     const summary = result.error.issues
       .map((i) => `  - ${i.path.join(".") || "<root>"}: ${i.message}`)
