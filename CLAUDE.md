@@ -37,6 +37,11 @@ src/
     handler.ts            makeWebhookHandler(route, deps) — per-request logic
     idempotencyKey.ts     opportunistic sha256 header for AutoOps-shaped bodies
     idempotencyStrategies.ts  named registry of (body) => key functions
+  health/                 background dependency monitor for /healthz
+    types.ts              HealthSnapshot, DependencyStatus, DependencyName
+    probes.ts             probeOutboxDb, probeKafkaAdmin (with timeout)
+    monitor.ts            createHealthMonitor — cached snapshot + state-transition logging
+    admin.ts              createHealthAdmin — long-lived @platformatic/kafka Admin client
   admin/                  /admin/routes endpoint (token-auth, hot reload)
     auth.ts               timing-safe X-Admin-Token verification
     routesFile.ts         atomic-write helpers for ROUTES_FILE
@@ -52,11 +57,13 @@ src/
       index.ts            createKafkaProvider(config) factory
   logging/
     index.ts              ILogger + Pino+ECS factory (sync destination)
+    heartbeat.ts          startHeartbeat — periodic stats log
   outbox/
     db.ts                 bun:sqlite Database, migrations, WAL pragmas, close handling
     schemas.ts            Zod OutboxRow + topic ("raw" only) / status enums
     writer.ts             enqueue(row) — single-row SQLite insert
     drainer.ts            polling loop, exponential backoff, age-based give-up
+    metrics.ts            DrainMetrics — in-memory throughput + lastError
     backoff.ts            pure: nextDelayMs(attempts, capMs)
 test/
   preload.ts              sets LOG_LEVEL=silent for bun test
@@ -74,7 +81,7 @@ test/
 
 | Process | Entry | Responsibility |
 |---|---|---|
-| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — parse JSON, `outbox.enqueue(row)` (single SQLite insert), return 202. Non-JSON bodies get 400; outbox enqueue failures return 500. The outbox drainer (`src/outbox/drainer.ts`) publishes to Kafka in the background with exponential backoff. `/healthz` reports producer status and outbox stats (`pending`, `failed`, `oldestPendingAgeMs`); 503 when the producer is disconnected. `OUTBOX_ENABLED=false` falls back to inline publish (escape hatch). |
+| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — parse JSON, `outbox.enqueue(row)` (single SQLite insert), return 202. Non-JSON bodies get 400; outbox enqueue failures return 500. The outbox drainer (`src/outbox/drainer.ts`) publishes to Kafka in the background with exponential backoff. `/healthz` reads a cached `HealthMonitor` snapshot. Returns 200 when the producer, outbox DB, and Kafka broker are all healthy; 200 + `status: "degraded"` when only configured topics are missing (gateway keeps buffering); 503 when any required dependency fails. Response includes `dependencies.{kafkaProducer, outboxDb, kafkaBroker, topics}`, `outbox.{pendingByTopic, publishedLast60s, lastPublishedAt, lastError}` plus existing fields. `OUTBOX_ENABLED=false` falls back to inline publish (escape hatch). |
 
 Add new downstream behavior (Slack, PagerDuty, aggregates, sinks into a database) as a **separate consumer service** on `ops.elastic.autoops.raw.v1` (or a future `events.v1` published by a downstream normalizer) — never bolt it into the gateway.
 
@@ -141,6 +148,7 @@ config.server.{port}
 config.kafka.{provider, clientId, brokers, msk:{region, clusterArn, authMode}, confluent:{apiKey, apiSecret}}
 config.observability.{logLevel}
 config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
+config.health.{probeIntervalMs, probeTimeoutMs, heartbeatMs}
 config.routes[].{name, path, topic, dlqTopic, sourceHeader, keyFields, idempotency}
 ```
 

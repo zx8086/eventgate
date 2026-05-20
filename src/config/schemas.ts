@@ -21,6 +21,24 @@ const confluentSchema = z.strictObject({
   apiSecret: z.string().describe("Confluent Cloud API secret (SASL/PLAIN password)."),
 });
 
+const healthSchema = z.strictObject({
+  probeIntervalMs: z
+    .number()
+    .int()
+    .positive()
+    .describe("Background health-probe cadence in ms. /healthz reads the cached result instantly."),
+  probeTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .describe("Per-probe timeout in ms. A hung dependency cannot stall the monitor."),
+  heartbeatMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe("Periodic stats-heartbeat interval in ms. 0 disables the heartbeat."),
+});
+
 const routeSchema = z.strictObject({
   name: z.string().min(1).describe("Human-readable route id; used in logs and as the source Kafka header value."),
   path: z
@@ -201,6 +219,7 @@ export const configSchema = z
         .positive()
         .describe("Pending-row count above which the gateway logs a warn each iteration."),
     }),
+    health: healthSchema,
     admin: z
       .strictObject({
         token: z

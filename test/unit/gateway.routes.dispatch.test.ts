@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { resetConfigCache } from "../../src/config/loader.ts";
 import { buildRoutes } from "../../src/gateway/routes.ts";
+import type { HealthSnapshot } from "../../src/health/types.ts";
+import type { DrainMetricsSnapshot } from "../../src/outbox/metrics.ts";
 
 const noopProducer = {
   isConnected: () => true,
@@ -13,10 +15,45 @@ function fakeOutbox() {
   const calls: Array<{ topic: string; messageKey: string }> = [];
   return {
     enqueue: (row: { topic: string; messageKey: string }) => calls.push(row),
-    backlogStats: () => ({ pending: 0, failed: 0, oldestPendingAgeMs: 0 }),
+    backlogStats: () => ({ pending: 0, failed: 0, oldestPendingAgeMs: 0, pendingByTopic: {} }),
     calls,
   };
 }
+
+function fakeMonitor(snapshot: HealthSnapshot) {
+  return {
+    start: async () => {},
+    stop: async () => {},
+    snapshot: () => snapshot,
+    probeOnce: async () => {},
+  };
+}
+
+function fakeMetrics(snap: DrainMetricsSnapshot) {
+  return {
+    recordPublished: () => {},
+    recordError: () => {},
+    snapshot: () => snap,
+  };
+}
+
+const healthySnap: HealthSnapshot = {
+  status: "healthy",
+  ok: true,
+  checkedAt: 1_000,
+  dependencies: {
+    kafkaProducer: { ok: true, lastCheckedAt: 1_000, connected: true },
+    outboxDb: { ok: true, lastCheckedAt: 1_000 },
+    kafkaBroker: { ok: true, lastCheckedAt: 1_000, brokerProbeMs: 5 },
+    topics: { ok: true, lastCheckedAt: 1_000, missing: [] },
+  },
+};
+
+const emptyMetricsSnap: DrainMetricsSnapshot = {
+  publishedLast60s: 0,
+  lastPublishedAt: null,
+  lastError: null,
+};
 
 let snapshot: NodeJS.ProcessEnv;
 
@@ -58,7 +95,12 @@ afterEach(() => {
 describe("buildRoutes with multiple routes", () => {
   it("registers a POST handler per configured route", () => {
     const outbox = fakeOutbox();
-    const routes = buildRoutes({ producer: noopProducer, outbox });
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(healthySnap),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
     expect(routes["/webhooks/elastic/autoops"]).toBeDefined();
     expect(routes["/webhooks/datadog/alerts"]).toBeDefined();
     expect(routes["/healthz"]).toBeDefined();
@@ -66,7 +108,12 @@ describe("buildRoutes with multiple routes", () => {
 
   it("dispatches each route to its own topic", async () => {
     const outbox = fakeOutbox();
-    const routes = buildRoutes({ producer: noopProducer, outbox });
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(healthySnap),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
 
     const r1 = routes["/webhooks/elastic/autoops"] as { POST: (req: Request) => Promise<Response> };
     await r1.POST(
@@ -93,33 +140,104 @@ describe("buildRoutes with multiple routes", () => {
     expect(outbox.calls[1]?.messageKey).toBe("a-1");
   });
 
-  it("healthz reports producer + outbox status", () => {
+  it("healthz returns 200 + healthy when all dependencies are ok", async () => {
     const outbox = fakeOutbox();
-    const routes = buildRoutes({ producer: noopProducer, outbox });
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(healthySnap),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
     const healthz = routes["/healthz"] as () => Response;
     const res = healthz();
     expect(res.status).toBe(200);
+    const body = await res.json() as { status: string; dependencies: Record<string, { ok: boolean }> };
+    expect(body.status).toBe("healthy");
+    expect(body.dependencies.kafkaProducer?.ok).toBe(true);
   });
 
-  it("healthz includes the registered routes", async () => {
+  it("healthz returns 200 + degraded when only topics are missing", async () => {
     const outbox = fakeOutbox();
-    const routes = buildRoutes({ producer: noopProducer, outbox });
+    const degraded: HealthSnapshot = {
+      ...healthySnap,
+      status: "degraded",
+      dependencies: {
+        ...healthySnap.dependencies,
+        topics: { ok: false, lastCheckedAt: 1_000, missing: ["T_MISSING"] },
+      },
+    };
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(degraded),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
     const healthz = routes["/healthz"] as () => Response;
     const res = healthz();
-    const payload = await res.json() as { routes?: Array<{ name: string; path: string; topic: string; dlqTopic?: string }> };
-    expect(payload.routes).toEqual([
-      {
-        name: "elastic-autoops",
-        path: "/webhooks/elastic/autoops",
-        topic: "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
-        dlqTopic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+    expect(res.status).toBe(200);
+    const body = await res.json() as { status: string; dependencies: { topics: { missing: string[] } } };
+    expect(body.status).toBe("degraded");
+    expect(body.dependencies.topics.missing).toEqual(["T_MISSING"]);
+  });
+
+  it("healthz returns 503 + unhealthy when a required dependency fails", async () => {
+    const outbox = fakeOutbox();
+    const unhealthy: HealthSnapshot = {
+      ...healthySnap,
+      status: "unhealthy",
+      ok: false,
+      dependencies: {
+        ...healthySnap.dependencies,
+        kafkaBroker: { ok: false, lastCheckedAt: 1_000, lastError: "connection refused" },
       },
-      {
-        name: "datadog-alerts",
-        path: "/webhooks/datadog/alerts",
-        topic: "T_PRIVATE_SOURCE_DATADOG_ALERTS",
-        dlqTopic: "DLQ_T_PRIVATE_SOURCE_DATADOG_ALERTS",
-      },
-    ]);
+    };
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(unhealthy),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
+    const healthz = routes["/healthz"] as () => Response;
+    const res = healthz();
+    expect(res.status).toBe(503);
+    const body = await res.json() as { status: string };
+    expect(body.status).toBe("unhealthy");
+  });
+
+  it("healthz includes outbox stats and drain metrics", async () => {
+    const outbox = fakeOutbox();
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(healthySnap),
+      metrics: fakeMetrics({
+        publishedLast60s: 42,
+        lastPublishedAt: 999,
+        lastError: { topic: "T", message: "x", at: 500 },
+      }),
+    });
+    const healthz = routes["/healthz"] as () => Response;
+    const res = healthz();
+    const body = await res.json() as {
+      outbox: { publishedLast60s: number; lastPublishedAt: number | null; lastError: unknown; pendingByTopic: Record<string, number> };
+    };
+    expect(body.outbox.publishedLast60s).toBe(42);
+    expect(body.outbox.lastPublishedAt).toBe(999);
+    expect(body.outbox.lastError).toEqual({ topic: "T", message: "x", at: 500 });
+    expect(body.outbox.pendingByTopic).toEqual({});
+  });
+
+  it("healthz still includes the registered routes", async () => {
+    const outbox = fakeOutbox();
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(healthySnap),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
+    const healthz = routes["/healthz"] as () => Response;
+    const res = healthz();
+    const body = await res.json() as { routes: Array<{ name: string }> };
+    expect(body.routes.map((r) => r.name)).toEqual(["elastic-autoops", "datadog-alerts"]);
   });
 });

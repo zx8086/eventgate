@@ -4,11 +4,15 @@ import { mkdirSync } from "node:fs";
 import { config } from "../config/index.ts";
 import { resetConfigCache } from "../config/loader.ts";
 import type { RouteConfig } from "../config/schemas.ts";
+import { createHealthAdmin } from "../health/admin.ts";
+import { createHealthMonitor } from "../health/monitor.ts";
 import { getLogger } from "../logging/index.ts";
+import { startHeartbeat, type HeartbeatHandle } from "../logging/heartbeat.ts";
 import { createProducer } from "../kafka/producer.ts";
 import { createKafkaProvider } from "../kafka/providers/index.ts";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../outbox/db.ts";
 import { startDrainer, type DrainerHandle } from "../outbox/drainer.ts";
+import { createDrainMetrics } from "../outbox/metrics.ts";
 import { createWriter, type OutboxWriter } from "../outbox/writer.ts";
 import { buildRoutes } from "./routes.ts";
 
@@ -18,6 +22,8 @@ const provider = createKafkaProvider(config);
 log.info({ provider: provider.name, providerType: provider.type }, "kafka provider selected");
 
 const producer = await createProducer(config.kafka.clientId, provider);
+
+const drainMetrics = createDrainMetrics();
 
 let outboxDb: OutboxDatabase | undefined;
 let outboxWriter: OutboxWriter | undefined;
@@ -40,6 +46,7 @@ if (config.outbox.enabled) {
       busyPollMs: config.outbox.busyPollMs,
       backlogWarnThreshold: config.outbox.backlogWarnThreshold,
     },
+    metrics: drainMetrics,
   });
   log.info(
     { dbPath: config.outbox.dbPath, batchSize: config.outbox.batchSize },
@@ -48,6 +55,18 @@ if (config.outbox.enabled) {
 } else {
   log.warn("outbox disabled; inline publish (escape hatch)");
 }
+
+const healthAdmin = await createHealthAdmin(provider);
+const expectedTopics = config.routes.flatMap((r) => [r.topic, r.dlqTopic]);
+const monitor = createHealthMonitor({
+  producer,
+  outboxDb,
+  admin: healthAdmin,
+  expectedTopics,
+  probeIntervalMs: config.health.probeIntervalMs,
+  probeTimeoutMs: config.health.probeTimeoutMs,
+});
+await monitor.start();
 
 let server: ReturnType<typeof Bun.serve> | undefined;
 
@@ -69,6 +88,8 @@ function rebuildRoutes(newRoutes?: RouteConfig[]): ReturnType<typeof buildRoutes
   return buildRoutes({
     producer,
     outbox: outboxWriter,
+    monitor,
+    metrics: drainMetrics,
     adminContext,
   });
 }
@@ -104,14 +125,59 @@ log.info(
   {
     host: server.hostname,
     port: server.port,
+    provider: provider.name,
+    providerType: provider.type,
+    outbox: {
+      enabled: config.outbox.enabled,
+      dbPath: config.outbox.enabled ? config.outbox.dbPath : null,
+    },
     routes: config.routes.map((r) => ({ name: r.name, path: r.path, topic: r.topic })),
+    health: {
+      probeIntervalMs: config.health.probeIntervalMs,
+      probeTimeoutMs: config.health.probeTimeoutMs,
+      dependencies: [
+        "kafkaProducer",
+        config.outbox.enabled ? "outboxDb" : null,
+        "kafkaBroker",
+        "topics",
+      ].filter((d): d is string => d !== null),
+    },
+    heartbeatMs: config.health.heartbeatMs,
   },
   "gateway listening",
 );
 
+const heartbeat: HeartbeatHandle = startHeartbeat({
+  intervalMs: config.health.heartbeatMs,
+  snapshot: () => {
+    const snap = monitor.snapshot();
+    const drain = drainMetrics.snapshot();
+    const stats = outboxWriter?.backlogStats();
+    return {
+      producerConnected: snap.dependencies.kafkaProducer?.ok ?? false,
+      brokerOk: snap.dependencies.kafkaBroker?.ok ?? false,
+      topicsOk: snap.dependencies.topics?.ok ?? true,
+      status: snap.status,
+      ...(stats
+        ? {
+            pending: stats.pending,
+            failed: stats.failed,
+            oldestPendingAgeMs: stats.oldestPendingAgeMs,
+            pendingByTopic: stats.pendingByTopic,
+          }
+        : {}),
+      publishedLast60s: drain.publishedLast60s,
+      lastPublishedAt: drain.lastPublishedAt,
+    };
+  },
+});
+
 async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
   server?.stop();
+  heartbeat.stop();
+  await monitor.stop();
+  await healthAdmin.close();
   if (drainer) await drainer.stop();
   await producer.disconnect();
   await provider.close();

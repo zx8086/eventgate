@@ -2,6 +2,7 @@
 import { getLogger } from "../logging/index.ts";
 import { nextDelayMs } from "./backoff.ts";
 import type { OutboxDatabase } from "./db.ts";
+import type { DrainMetrics } from "./metrics.ts";
 
 const log = getLogger("outbox.drainer");
 
@@ -60,8 +61,9 @@ export async function runOutboxIteration(opts: {
   db: OutboxDatabase;
   producer: DrainerProducer;
   config: DrainerConfig;
+  metrics?: DrainMetrics;
 }): Promise<IterationResult> {
-  const { db, producer, config } = opts;
+  const { db, producer, config, metrics } = opts;
   const now = Date.now();
 
   const pending = db
@@ -95,10 +97,16 @@ export async function runOutboxIteration(opts: {
       await producer.sendByTopic(kafkaTopic, row.message_key, row.payload, headers);
       markDispatched.run({ id: row.id, now: Date.now() });
       published += 1;
+      metrics?.recordPublished(row.topic);
     } catch (err) {
       const attempts = row.attempts + 1;
       const ageMs = Date.now() - row.created_at;
       const message = err instanceof Error ? err.message : String(err);
+      metrics?.recordError(row.topic, message);
+      log.warn(
+        { topic: row.topic, attempts, ageMs, err: message, id: row.id },
+        "outbox publish failed",
+      );
       if (ageMs > config.maxAgeMs) {
         markFailed.run({ id: row.id, attempts, err: message });
         failedPermanently += 1;
@@ -130,8 +138,9 @@ export function startDrainer(opts: {
   db: OutboxDatabase;
   producer: DrainerProducer;
   config: DrainerStartConfig;
+  metrics?: DrainMetrics;
 }): DrainerHandle {
-  const { db, producer, config } = opts;
+  const { db, producer, config, metrics } = opts;
   let stopped = false;
   let currentTimer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<void> = Promise.resolve();
@@ -140,7 +149,7 @@ export function startDrainer(opts: {
     if (stopped) return;
     inFlight = (async () => {
       try {
-        const result = await runOutboxIteration({ db, producer, config });
+        const result = await runOutboxIteration({ db, producer, config, metrics });
 
         const backlog = (db
           .query("SELECT COUNT(*) AS c FROM outbox WHERE status='pending'")

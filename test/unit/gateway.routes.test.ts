@@ -2,8 +2,45 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { resetConfigCache } from "../../src/config/loader.ts";
 import { buildRoutes } from "../../src/gateway/routes.ts";
+import type { HealthSnapshot } from "../../src/health/types.ts";
 import type { EventProducer } from "../../src/kafka/producer.ts";
+import type { DrainMetricsSnapshot } from "../../src/outbox/metrics.ts";
 import type { OutboxWriter, EnqueueInput, BacklogStats } from "../../src/outbox/writer.ts";
+
+const healthySnap: HealthSnapshot = {
+  status: "healthy",
+  ok: true,
+  checkedAt: 1_000,
+  dependencies: {
+    kafkaProducer: { ok: true, lastCheckedAt: 1_000, connected: true },
+    outboxDb: { ok: true, lastCheckedAt: 1_000 },
+    kafkaBroker: { ok: true, lastCheckedAt: 1_000, brokerProbeMs: 5 },
+    topics: { ok: true, lastCheckedAt: 1_000, missing: [] },
+  },
+};
+
+const emptyMetricsSnap: DrainMetricsSnapshot = {
+  publishedLast60s: 0,
+  lastPublishedAt: null,
+  lastError: null,
+};
+
+function fakeMonitor(snap: HealthSnapshot = healthySnap) {
+  return {
+    start: async () => {},
+    stop: async () => {},
+    snapshot: () => snap,
+    probeOnce: async () => {},
+  };
+}
+
+function fakeMetrics(snap: DrainMetricsSnapshot = emptyMetricsSnap) {
+  return {
+    recordPublished: () => {},
+    recordError: () => {},
+    snapshot: () => snap,
+  };
+}
 
 function fakeProducer(): EventProducer {
   return {
@@ -20,7 +57,7 @@ function fakeOutbox(): { writer: OutboxWriter; rows: EnqueueInput[] } {
       rows.push(row);
     },
     backlogStats(): BacklogStats {
-      return { pending: rows.length, failed: 0, oldestPendingAgeMs: 0 };
+      return { pending: rows.length, failed: 0, oldestPendingAgeMs: 0, pendingByTopic: {} };
     },
   };
   return { writer, rows };
@@ -54,7 +91,7 @@ afterEach(() => {
 describe("POST /webhooks/elastic/autoops", () => {
   it("returns 400 on non-JSON body", async () => {
     const { writer, rows } = fakeOutbox();
-    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
+    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer, monitor: fakeMonitor(), metrics: fakeMetrics() });
     const res = await postJson(routes, "not json");
     expect(res.status).toBe(400);
     const json = (await res.json()) as { accepted: boolean; error: string };
@@ -65,7 +102,7 @@ describe("POST /webhooks/elastic/autoops", () => {
 
   it("returns 202 and enqueues one row with source header only for non-AutoOps JSON", async () => {
     const { writer, rows } = fakeOutbox();
-    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
+    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer, monitor: fakeMonitor(), metrics: fakeMetrics() });
     const res = await postJson(routes, JSON.stringify({ hello: "world" }));
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ accepted: true });
@@ -81,7 +118,7 @@ describe("POST /webhooks/elastic/autoops", () => {
 
   it("returns 202 and includes the idempotencyKey header for an AutoOps body", async () => {
     const { writer, rows } = fakeOutbox();
-    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
+    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer, monitor: fakeMonitor(), metrics: fakeMetrics() });
     const body = {
       resourceId: "deploy-1",
       title: "JVM pressure",
@@ -99,7 +136,7 @@ describe("POST /webhooks/elastic/autoops", () => {
 
   it("uses deployment-id (hyphenated) as message key when resourceId is absent", async () => {
     const { writer, rows } = fakeOutbox();
-    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
+    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer, monitor: fakeMonitor(), metrics: fakeMetrics() });
     const body = {
       "deployment-id": "deploy-2",
       title: "x",
@@ -112,7 +149,7 @@ describe("POST /webhooks/elastic/autoops", () => {
 
   it("falls back to 'unkeyed' when neither resourceId nor deployment-id is present", async () => {
     const { writer, rows } = fakeOutbox();
-    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer });
+    const routes = buildRoutes({ producer: fakeProducer(), outbox: writer, monitor: fakeMonitor(), metrics: fakeMetrics() });
     await postJson(routes, JSON.stringify({ anything: 1 }));
     expect(rows[0].messageKey).toBe("unkeyed");
   });
