@@ -37,6 +37,11 @@ export const defaults = {
     busyPollMs: 250,
     backlogWarnThreshold: 50_000,
   },
+  health: {
+    probeIntervalMs: 30_000,
+    probeTimeoutMs: 5_000,
+    heartbeatMs: 60_000,
+  },
   routes: [
     {
       name: "elastic-autoops",
