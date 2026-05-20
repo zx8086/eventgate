@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/deploy/02-security-groups.sh
-# Creates sg-alb, sg-gateway, sg-writer, sg-msk and wires rules.
+# Creates sg-alb, sg-gateway, sg-msk and wires rules.
 
 SCRIPT_NAME="02-security-groups"
 source "$(dirname "$0")/lib.sh"
@@ -27,12 +27,10 @@ ensure_sg() {
 
 sg_alb="$(ensure_sg eventgate-alb 'eventgate ALB ingress :80')"
 sg_gw="$(ensure_sg eventgate-gateway 'eventgate gateway tasks')"
-sg_wr="$(ensure_sg eventgate-writer 'eventgate writer tasks')"
 sg_msk="$(ensure_sg eventgate-msk 'eventgate MSK Serverless')"
 
 write_env SG_ALB "$sg_alb"
 write_env SG_GATEWAY "$sg_gw"
-write_env SG_WRITER "$sg_wr"
 write_env SG_MSK "$sg_msk"
 
 ingress_cidr() {
@@ -52,6 +50,5 @@ ingress_sg() {
 ingress_cidr "$sg_alb" 80 0.0.0.0/0
 ingress_sg   "$sg_gw"  3000 "$sg_alb"
 ingress_sg   "$sg_msk" 9098 "$sg_gw"
-ingress_sg   "$sg_msk" 9098 "$sg_wr"
 
 log "security groups done"

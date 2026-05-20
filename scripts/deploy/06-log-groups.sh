@@ -15,4 +15,3 @@ ensure_log_group() {
 }
 
 ensure_log_group /eventgate/gateway
-ensure_log_group /eventgate/writer

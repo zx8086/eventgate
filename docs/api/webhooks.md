@@ -1,7 +1,7 @@
 # Webhooks API
 
 > **Targets:** Bun 1.3.11+ | TypeScript 5.x
-> **Last updated:** 2026-05-19
+> **Last updated:** 2026-05-20
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
 The gateway exposes two HTTP endpoints — the Elastic AutoOps webhook receiver and a healthcheck. This document is the contract: request and response shapes, status codes, and the opportunistic idempotency-key header the gateway stamps when it recognizes an AutoOps body. The implementation lives in `src/gateway/routes.ts` and `src/gateway/idempotencyKey.ts`.
@@ -25,7 +25,7 @@ Any other path returns `404` with the body `Not found` and is logged at `warn` w
 
 ### Request body
 
-The gateway is **accept-everything**: any valid JSON body is accepted. There is no schema validation and no normalization. The body is forwarded verbatim to the `ops.elastic.autoops.raw.v1` Kafka topic. Downstream consumer services (not part of this repo) are responsible for parsing, validating, and normalizing the payload.
+The gateway is **accept-everything**: any valid JSON body is accepted. There is no schema validation and no normalization. The body is forwarded verbatim to the route's configured Kafka topic (the seed `elastic-autoops` route publishes to `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS`). Downstream consumer services (not part of this repo) are responsible for parsing, validating, and normalizing the payload.
 
 The only fields the gateway inspects are used to derive a message key and an optional `idempotencyKey` header:
 

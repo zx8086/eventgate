@@ -1,7 +1,7 @@
 # Getting Started
 
 > **Targets:** Bun 1.3.11+ | TypeScript 5.x
-> **Last updated:** 2026-05-19
+> **Last updated:** 2026-05-20
 > **Conventions:** See [../../guides/documentation-guide.md](../../guides/documentation-guide.md)
 
 Local development loop for eventgate: bring up Redpanda via Docker Compose, run the gateway in watch mode, send a sample webhook, and run the unit tests. This is the fastest path to a running stack on a developer laptop.
@@ -40,9 +40,9 @@ docker compose up -d
 
 `docker compose up -d` starts:
 
-- Redpanda single-node (Kafka API on 9092). The companion `redpanda-init` container auto-creates `ops.elastic.autoops.raw.v1`, `ops.elastic.autoops.events.v1`, and `ops.elastic.autoops.dlq.v1`.
+- Redpanda single-node (Kafka API on 9092). The companion `redpanda-init` container auto-creates `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS` — the topic the seed route in `src/config/defaults.ts` publishes to.
 
-No database service is started — eventgate publishes only to Kafka. The gateway writes solely to `raw.v1`; the other two topics are reserved for future downstream consumer services.
+No database service is started — eventgate publishes only to Kafka. To add a new vendor, declare its topic in `ROUTES_JSON` / `ROUTES_FILE` and create it manually with `rpk -X brokers=localhost:9092 topic create <topic>`. The companion DLQ topic (`DLQ_T_<topic>`) is declared on each route but never written by the gateway, so it does not need to be pre-created here.
 
 ## Run the gateway
 
@@ -52,11 +52,17 @@ bun run dev:gateway
 
 This uses `bun run --watch`, so saving a TypeScript file restarts the gateway. It listens on `http://localhost:3000`.
 
-Expected log lines:
+Expected log lines (one line per record; pretty-printed here for readability):
 
 ```
 kafka provider selected { provider: 'Local Kafka', providerType: 'local' }
-gateway listening { host: '0.0.0.0', port: 3000, topics: { raw: 'ops.elastic.autoops.raw.v1', events: 'ops.elastic.autoops.events.v1' } }
+outbox enabled { dbPath: './data/outbox.db', batchSize: 100 }
+admin endpoint disabled (ADMIN_TOKEN unset)
+gateway listening {
+  host: '0.0.0.0',
+  port: 3000,
+  routes: [ { name: 'elastic-autoops', path: '/webhooks/elastic/autoops', topic: 'T_PRIVATE_SOURCE_ELASTIC_AUTOOPS' } ]
+}
 ```
 
 ## Send a test webhook
@@ -83,7 +89,7 @@ Expected response:
 Confirm the message landed in Kafka:
 
 ```bash
-docker exec eventgate-redpanda rpk topic consume ops.elastic.autoops.raw.v1 -n 1
+docker exec eventgate-redpanda rpk topic consume T_PRIVATE_SOURCE_ELASTIC_AUTOOPS -n 1
 ```
 
 The gateway stamps an opportunistic `idempotencyKey` header on the Kafka record when it can derive one from the body — see [../api/webhooks.md](../api/webhooks.md#idempotency-header). The HTTP response itself is always just `{ accepted: true }`.
@@ -98,8 +104,8 @@ bun run typecheck
 `bun test` runs with `LOG_LEVEL=silent` (set by `test/preload.ts`), so the output is just test results — no log noise. Single-file or single-test execution:
 
 ```bash
-bun test test/unit/normalize.test.ts
-bun test -t "buildIdempotencyKey"
+bun test test/unit/outbox.writer.test.ts
+bun test -t "deriveIdempotencyKey"
 ```
 
 ## Configuration-aware probes
@@ -126,7 +132,7 @@ docker compose down
 |---------|-------------|-----|
 | `bun run dev:gateway` exits immediately with a Zod error | An env var is invalid or the production refinements tripped | Read the error path; usually `KAFKA_PROVIDER` is set without the matching provider-specific vars, or `ENVIRONMENT=prod` is set accidentally |
 | `/healthz` returns `503` | Producer not connected | Confirm Redpanda is healthy: `docker compose ps` and `docker logs eventgate-redpanda` |
-| `404` from the gateway | Wrong path | The only routes are `POST /webhooks/elastic/autoops` and `GET /healthz` |
+| `404` from the gateway | Wrong path | Default routes are `POST /webhooks/elastic/autoops` and `GET /healthz`. Add more by setting `ROUTES_JSON` / `ROUTES_FILE`. `PUT /admin/routes` is registered only when both `ADMIN_TOKEN` (min 32 chars) and `ROUTES_FILE` are set. |
 | Gateway logs `kafka publish failed` repeatedly | Brokers unreachable | Check `KAFKA_BROKERS` matches the Redpanda advertised listener |
 
 ## See Also
@@ -144,3 +150,4 @@ docker compose down
 | 2026-05-19 | Initial getting-started doc created |
 | 2026-05-19 | Removed Couchbase bootstrap and writer process; gateway-only loop (SIO-795) |
 | 2026-05-19 | Smoke test now consumes `raw.v1`; expected response shrunk to `{ accepted: true }` under accept-everything contract (SIO-801) |
+| 2026-05-20 | Topics flow from `config.routes[]`; `redpanda-init` now creates `T_PRIVATE_SOURCE_ELASTIC_AUTOOPS`; startup log shows the registered route list; admin endpoint mentioned in 404 troubleshooting (SIO-802 / SIO-803 / SIO-807..SIO-811 cleanup, SIO-812) |

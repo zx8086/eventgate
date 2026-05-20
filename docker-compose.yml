@@ -33,6 +33,4 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        rpk -X brokers=redpanda:9092 topic create ops.elastic.autoops.raw.v1 -p 3 || true
-        rpk -X brokers=redpanda:9092 topic create ops.elastic.autoops.events.v1 -p 3 || true
-        rpk -X brokers=redpanda:9092 topic create ops.elastic.autoops.dlq.v1 -p 1 || true
+        rpk -X brokers=redpanda:9092 topic create T_PRIVATE_SOURCE_ELASTIC_AUTOOPS -p 3 || true

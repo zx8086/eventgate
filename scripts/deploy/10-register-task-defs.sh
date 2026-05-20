@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/deploy/10-register-task-defs.sh
-# Registers task definitions for the gateway and writer services.
+# Registers the gateway task definition.
 
 SCRIPT_NAME="10-register-task-defs"
 source "$(dirname "$0")/lib.sh"
@@ -8,18 +8,14 @@ source "$(dirname "$0")/lib.sh"
 image_uri="$(require_env IMAGE_URI)"
 exec_role="$(require_env TASK_EXECUTION_ROLE_ARN)"
 gw_role="$(require_env GATEWAY_TASK_ROLE_ARN)"
-wr_role="$(require_env WRITER_TASK_ROLE_ARN)"
 bootstrap="$(require_env MSK_BOOTSTRAP)"
-
-# brokers as a comma-separated string for KAFKA_BROKERS env
-brokers="$bootstrap"
 
 env_block_common='[
   {"name":"ENVIRONMENT","value":"prod"},
-  {"name":"KAFKA_AUTH","value":"iam"},
-  {"name":"KAFKA_REGION","value":"'"$AWS_REGION"'"},
-  {"name":"KAFKA_BROKERS","value":"'"$brokers"'"},
-  {"name":"COUCHBASE_ENABLED","value":"false"},
+  {"name":"KAFKA_PROVIDER","value":"msk"},
+  {"name":"MSK_AUTH_MODE","value":"iam"},
+  {"name":"MSK_REGION","value":"'"$AWS_REGION"'"},
+  {"name":"KAFKA_BROKERS","value":"'"$bootstrap"'"},
   {"name":"LOG_LEVEL","value":"info"}
 ]'
 
@@ -64,8 +60,3 @@ gw_arn="$(register eventgate-gateway "$gw_role" \
   '["bun","run","src/gateway/index.ts"]' /eventgate/gateway)"
 log "registered gateway task def: $gw_arn"
 write_env GATEWAY_TASK_DEF_ARN "$gw_arn"
-
-wr_arn="$(register eventgate-writer "$wr_role" \
-  '["bun","run","src/writer/index.ts"]' /eventgate/writer)"
-log "registered writer task def: $wr_arn"
-write_env WRITER_TASK_DEF_ARN "$wr_arn"
