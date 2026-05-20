@@ -39,9 +39,21 @@ describe("config.health", () => {
   it("rejects negative probeIntervalMs", async () => {
     process.env = { ...process.env, HEALTH_PROBE_INTERVAL_MS: "-1" };
     resetConfigCache();
-    expect(async () => {
-      const { config } = await import("../../src/config/index.ts");
-      void config.health;
-    }).toThrow();
+    const { config } = await import("../../src/config/index.ts");
+    expect(() => config.health).toThrow(/probeIntervalMs/);
+  });
+
+  it("rejects probeTimeoutMs=0 (positive boundary)", async () => {
+    process.env = { ...process.env, HEALTH_PROBE_TIMEOUT_MS: "0" };
+    resetConfigCache();
+    const { config } = await import("../../src/config/index.ts");
+    expect(() => config.health).toThrow(/probeTimeoutMs/);
+  });
+
+  it("rejects non-integer heartbeatMs", async () => {
+    process.env = { ...process.env, STATS_HEARTBEAT_MS: "1.5" };
+    resetConfigCache();
+    const { config } = await import("../../src/config/index.ts");
+    expect(() => config.health).toThrow(/heartbeatMs/);
   });
 });
