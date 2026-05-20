@@ -30,12 +30,17 @@ Single-package Bun project (no workspaces). Conforms to the team `guides/` for: 
 src/
   config/                 4-pillar config (defaults, envMapping, schemas, loader, index)
     topicPolicy.ts        gateway topic naming policy (T_PRIVATE_SOURCE_*)
+    reservedPaths.ts      reserved operational paths (/healthz, /admin/routes)
   gateway/                Bun.serve HTTP receiver
     index.ts              entry point — wires KafkaProvider + EventProducer + outbox
     routes.ts             iterates config.routes; one POST handler per route
     handler.ts            makeWebhookHandler(route, deps) — per-request logic
     idempotencyKey.ts     opportunistic sha256 header for AutoOps-shaped bodies
     idempotencyStrategies.ts  named registry of (body) => key functions
+  admin/                  /admin/routes endpoint (token-auth, hot reload)
+    auth.ts               timing-safe X-Admin-Token verification
+    routesFile.ts         atomic-write helpers for ROUTES_FILE
+    routesEndpoint.ts     makeAdminRoutesHandler factory
   kafka/
     producer.ts           EventProducer wrapping @platformatic/kafka Producer (publishRaw only)
     providers/
@@ -85,6 +90,19 @@ against the org-wide naming policy.
 Adding a route: edit `defaults.ts` (PR) or set `ROUTES_JSON` (env). No
 TypeScript change unless the new source needs a custom idempotency strategy
 (`src/gateway/idempotencyStrategies.ts`).
+
+### Admin endpoint (optional)
+
+When `ADMIN_TOKEN` (min 32 chars) and `ROUTES_FILE` (path to a writable JSON file) are both set, the gateway registers `PUT /admin/routes` protected by an `X-Admin-Token` header. Body is the full routes array; on success it is validated by the same `routesSchema` used at startup, atomically written to `ROUTES_FILE`, and `server.reload({ routes })` swaps the live route map. Startup precedence for routes is `ROUTES_FILE > ROUTES_JSON > defaults`.
+
+Without `ADMIN_TOKEN`, the endpoint is not registered (returns 404). Without `ROUTES_FILE`, it is also not registered — the gateway logs a warning and refuses to enable an in-memory-only admin surface that would be lost on restart.
+
+`/healthz` and `/admin/routes` are reserved paths; any config route attempting to declare them fails startup with a Zod error.
+
+| Env var | Purpose |
+|---|---|
+| `ADMIN_TOKEN` | Shared secret for `/admin/routes`. Min 32 chars. Endpoint disabled when unset. |
+| `ROUTES_FILE` | Path to mounted JSON file holding the routes array. Required alongside `ADMIN_TOKEN` for the admin endpoint to register. Read on startup; takes precedence over `ROUTES_JSON`. |
 
 ### Kafka provider factory
 
@@ -154,6 +172,12 @@ docker compose down                                 # stop services
 - Project: [Event Gate](https://linear.app/siobytes/project/event-gate-9bf5601b0c39/overview) (status: Backlog, lead: Simon Owusu)
 - All issues are assigned to Simon Owusu (`me` via the Linear MCP `assignee` arg).
 - **Every approved plan MUST have a Linear issue in this project before implementation begins.** When exiting plan mode or completing a planning session, create the issue with the full plan (goals, steps, acceptance criteria, verification) and add it to the Event Gate project.
+- **Every Linear issue MUST include the spec and plan paths in its description** when a spec/plan exists. Format as a section near the top:
+  ```
+  **Spec:** `docs/superpowers/specs/<YYYY-MM-DD>-<topic>-design.md`
+  **Plan:** `docs/superpowers/plans/<YYYY-MM-DD>-<topic>.md`
+  ```
+  This applies to new issues AND to follow-up / cleanup tickets that derive from the same spec — they reference the parent spec/plan paths so a reader can recover the full context without grepping git history.
 - Never set issues to "Done" without explicit user approval.
 - Always preserve existing content when updating Linear issues (append, don't replace).
 
@@ -213,5 +237,7 @@ ALWAYS KEEP: Zod `.describe()` calls, business logic "why" comments (non-obvious
 ## Out of scope (do not add without discussion)
 
 Webhook auth (AutoOps connectors don't support native HMAC; defer until v2 adds shared-token header validation), Flink rolling aggregates, OpenTelemetry instrumentation, Bun workspace catalogs (single-package repo), runtime provider switching (KAFKA_PROVIDER is read once at startup), connection pooling at the provider layer, CDC-style outbox draining (Debezium etc. — we are the publisher), multi-process outbox drainers (single-writer per file), a CLI for replaying `failed` outbox rows (defer until the first incident calls for it), Bun Worker threads for the drainer, exactly-once Kafka delivery (downstream consumers may dedupe on the opportunistic `idempotencyKey` header), AutoOps-body validation/normalization (downstream consumers own that), parametric paths (/webhooks/:vendor/:product), topic-name templates, hot reload of routes (server.reload()), per-route auth/validation/normalization/response shaping, a mounted ROUTES_FILE source.
+
+The previous deferrals of hot route reload (`server.reload()`), a mounted routes file, and admin-endpoint authentication are now addressed by SIO-803 (`docs/superpowers/specs/2026-05-20-admin-routes-endpoint-design.md`). Webhook authentication for public webhook paths remains deferred.
 
 > Note: the outbox is **not** a "database integration in this repo" in the originally-deferred sense — that exclusion is about *downstream* domain storage. The outbox is a transport-layer durability buffer for the gateway itself.
