@@ -131,4 +131,21 @@ describe("HealthMonitor", () => {
     expect(monitor.snapshot().dependencies.kafkaBroker?.ok).toBe(true);
     await monitor.stop();
   });
+
+  it("reports healthy when outboxDb is intentionally absent (OUTBOX_ENABLED=false)", async () => {
+    const monitor = createHealthMonitor({
+      producer: fakeProducer(true),
+      // outboxDb intentionally omitted — escape hatch
+      admin: fakeAdmin(async () => ["T_A"]),
+      expectedTopics: ["T_A"],
+      probeIntervalMs: 10_000,
+      probeTimeoutMs: 1_000,
+    });
+    await monitor.start();
+    const snap = monitor.snapshot();
+    expect(snap.status).toBe("healthy");
+    expect(snap.ok).toBe(true);
+    expect(snap.dependencies.outboxDb).toBeUndefined();
+    await monitor.stop();
+  });
 });

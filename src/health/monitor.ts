@@ -71,7 +71,13 @@ export function createHealthMonitor(opts: HealthMonitorOptions): HealthMonitor {
     }
 
     const required = DEFAULT_REQUIREDNESS.required;
-    const requiredOk = required.every((name) => deps[name]?.ok ?? false);
+    // A required dependency that was never probed (e.g. outboxDb when
+    // OUTBOX_ENABLED=false) is treated as healthy by absence — the gateway
+    // simply doesn't depend on it in this configuration.
+    const requiredOk = required.every((name) => {
+      const dep = deps[name];
+      return dep === undefined ? true : dep.ok;
+    });
     const allOk = requiredOk && (deps.topics?.ok ?? true);
     const status: HealthSnapshot["status"] = !requiredOk ? "unhealthy" : !allOk ? "degraded" : "healthy";
 
