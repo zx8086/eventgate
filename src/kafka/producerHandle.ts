@@ -15,10 +15,10 @@ export type ProducerHandle = EventProducer & {
 
 const BREAKER_NAME = "kafka-producer";
 
-// Single-line helper to keep the log shape consistent across the three
-// transition events. Per circuit-breaker-guide §10, every transition log
-// carries event_name, breaker, from, failures, and (when relevant) the
-// next_attempt_at ISO timestamp.
+// Per circuit-breaker-guide §10, every transition log carries event_name,
+// breaker, from, failures, and (when relevant) the next_attempt_at ISO
+// timestamp. The `last_error` field appears only on circuit_breaker_opened
+// events, carrying the transport-error message that triggered the trip.
 function logTransition(
   log: ILogger,
   eventName:
@@ -28,6 +28,7 @@ function logTransition(
   from: string,
   snapshot: CircuitBreakerSnapshot,
   message: string,
+  lastError?: string,
 ): void {
   const bindings: Record<string, unknown> = {
     event_name: eventName,
@@ -37,6 +38,9 @@ function logTransition(
   };
   if (snapshot.nextAttemptAt !== null) {
     bindings.next_attempt_at = new Date(snapshot.nextAttemptAt).toISOString();
+  }
+  if (lastError !== undefined) {
+    bindings.last_error = lastError;
   }
   log.info(bindings, message);
 }
@@ -51,14 +55,17 @@ export function createProducerHandleFromInner(
   logger?: ILogger,
 ): ProducerHandle {
   const log = logger ?? getLogger("kafka.breaker");
+  // State tracked separately from the FSM solely so transition logs can
+  // include an accurate `from` field. The FSM drives every update via the
+  // onOpen / onHalfOpen / onClosed callbacks, so this stays in sync.
   let lastSeenState: CircuitBreakerSnapshot["state"] = "closed";
+  let breaker: CircuitBreaker;
 
-  const breaker = new CircuitBreaker(
-    breakerConfig,
-    (err) => !isApplicationLevelError(err),
-    () => {
-      // Increment caller-supplied counter first so a thrown logger never
-      // breaks the metrics path.
+  breaker = new CircuitBreaker(breakerConfig, {
+    isTransportError: (err) => !isApplicationLevelError(err),
+    onOpen: (lastError) => {
+      // Increment caller-supplied counter first so a thrown counter never
+      // breaks the log path.
       try {
         onBreakerOpen();
       } catch (cbErr) {
@@ -67,24 +74,37 @@ export function createProducerHandleFromInner(
           "breaker onOpen callback threw",
         );
       }
-      logTransition(log, "circuit_breaker_opened", lastSeenState, breaker.getSnapshot(), "circuit breaker opened");
+      logTransition(
+        log,
+        "circuit_breaker_opened",
+        lastSeenState,
+        breaker.getSnapshot(),
+        "circuit breaker opened",
+        lastError,
+      );
       lastSeenState = "open";
     },
-  );
-
-  const trackPostCallStateTransition = (): void => {
-    const currentState = breaker.getSnapshot().state;
-    if (lastSeenState !== currentState) {
-      if (currentState === "closed") {
-        logTransition(log, "circuit_breaker_closed", lastSeenState, breaker.getSnapshot(), "circuit breaker closed");
-      } else if (currentState === "half-open") {
-        logTransition(log, "circuit_breaker_half_open", lastSeenState, breaker.getSnapshot(), "circuit breaker half-open");
-      }
-      // open transitions are logged by the onOpen callback, not here, to
-      // avoid double-logging.
-      lastSeenState = currentState;
-    }
-  };
+    onHalfOpen: () => {
+      logTransition(
+        log,
+        "circuit_breaker_half_open",
+        lastSeenState,
+        breaker.getSnapshot(),
+        "circuit breaker half-open",
+      );
+      lastSeenState = "half-open";
+    },
+    onClosed: () => {
+      logTransition(
+        log,
+        "circuit_breaker_closed",
+        lastSeenState,
+        breaker.getSnapshot(),
+        "circuit breaker closed",
+      );
+      lastSeenState = "closed";
+    },
+  });
 
   return {
     isConnected: () => inner.isConnected(),
@@ -92,13 +112,7 @@ export function createProducerHandleFromInner(
       await inner.disconnect();
     },
     sendByTopic: async (topic, key, value, headers) => {
-      try {
-        await breaker.execute(() => inner.sendByTopic(topic, key, value, headers));
-        trackPostCallStateTransition();
-      } catch (err) {
-        trackPostCallStateTransition();
-        throw err;
-      }
+      await breaker.execute(() => inner.sendByTopic(topic, key, value, headers));
     },
     getBreakerSnapshot: () => breaker.getSnapshot(),
   };

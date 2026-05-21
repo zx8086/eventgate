@@ -141,12 +141,14 @@ describe("ProducerHandle", () => {
       from: string;
       failures: number;
       next_attempt_at?: string;
+      last_error?: string;
     };
     expect(openedObj.event_name).toBe("circuit_breaker_opened");
     expect(openedObj.breaker).toBe("kafka-producer");
     expect(openedObj.from).toBe("closed");
     expect(openedObj.failures).toBe(3);
     expect(typeof openedObj.next_attempt_at).toBe("string");
+    expect(openedObj.last_error).toBe("metadata failed 4 times.");
   });
 
   it("logs half-open and closed transitions through the full recovery cycle", async () => {
@@ -201,5 +203,44 @@ describe("ProducerHandle", () => {
     expect(closedLogs.length).toBe(1);
     expect((closedLogs[0]!.obj as { event_name: string; from: string }).event_name).toBe("circuit_breaker_closed");
     expect((closedLogs[0]!.obj as { from: string }).from).toBe("half-open");
+  });
+
+  it("logs the second open transition with from='half-open' when the probe fails", async () => {
+    // Inner producer that always fails — drives closed -> open, then on the
+    // half-open probe attempt fails again and goes back to open.
+    const inner = {
+      isConnected: () => true,
+      disconnect: async () => {},
+      sendByTopic: async () => {
+        throw new Error("metadata failed 4 times.");
+      },
+    };
+    const logs: Array<{ obj: object; msg: string }> = [];
+    const fakeLogger = {
+      info: (obj: unknown, msg?: string) => logs.push({ obj: obj as object, msg: (msg ?? "") as string }),
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      trace: () => {},
+      fatal: () => {},
+      child: () => fakeLogger,
+      flush: () => {},
+    };
+    const handle = createProducerHandleFromInner(inner, cfg, undefined, fakeLogger);
+
+    // First trip: closed -> open.
+    for (let i = 0; i < 3; i++) {
+      await handle.sendByTopic("T", String(i), "v", null).catch(() => undefined);
+    }
+    await Bun.sleep(250);
+    // Probe attempt: transitions to half-open inside execute, fails, returns to open.
+    await handle.sendByTopic("T", "probe", "v", null).catch(() => undefined);
+
+    const openedLogs = logs.filter((l) => l.msg === "circuit breaker opened");
+    expect(openedLogs.length).toBe(2);
+    // First opened: from="closed".
+    expect((openedLogs[0]!.obj as { from: string }).from).toBe("closed");
+    // Second opened: from="half-open" — the bug fixed by the FSM onHalfOpen callback.
+    expect((openedLogs[1]!.obj as { from: string }).from).toBe("half-open");
   });
 });

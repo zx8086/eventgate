@@ -16,22 +16,42 @@ export type CircuitBreakerSnapshot = {
 };
 
 export type IsTransportError = (err: unknown) => boolean;
-export type OnOpen = () => void;
+// onOpen receives the transport error message that triggered the trip (if any).
+// undefined when fired from forceOpen() or any path without a recorded error.
+export type OnOpen = (lastError?: string) => void;
+export type OnHalfOpen = () => void;
+export type OnClosed = () => void;
+
+export type CircuitBreakerCallbacks = {
+  isTransportError?: IsTransportError;
+  onOpen?: OnOpen;
+  onHalfOpen?: OnHalfOpen;
+  onClosed?: OnClosed;
+};
 
 export class CircuitBreaker {
   private state: CircuitState = "closed";
   private failures = 0;
   private successes = 0;
   private nextAttemptTime: number | null = null;
+  private readonly isTransportError: IsTransportError;
+  private readonly onOpen: OnOpen;
+  private readonly onHalfOpen: OnHalfOpen;
+  private readonly onClosed: OnClosed;
+  private pendingLastError: string | undefined;
 
   // The FSM is name-agnostic. Callers that need a name for log lines or
   // metric labels (e.g. ProducerHandle uses "kafka-producer") own that string
   // themselves — keeps this class portable per circuit-breaker-guide §4.
   constructor(
     private readonly config: CircuitBreakerConfig,
-    private readonly isTransportError: IsTransportError = () => true,
-    private readonly onOpen: OnOpen = () => {},
-  ) {}
+    callbacks: CircuitBreakerCallbacks = {},
+  ) {
+    this.isTransportError = callbacks.isTransportError ?? (() => true);
+    this.onOpen = callbacks.onOpen ?? (() => {});
+    this.onHalfOpen = callbacks.onHalfOpen ?? (() => {});
+    this.onClosed = callbacks.onClosed ?? (() => {});
+  }
 
   async execute<T>(operation: () => Promise<T>): Promise<T> {
     if (this.state === "open") {
@@ -48,7 +68,8 @@ export class CircuitBreaker {
       return result;
     } catch (error) {
       if (this.isTransportError(error)) {
-        this.onFailure();
+        const message = error instanceof Error ? error.message : String(error);
+        this.onFailure(message);
       }
       throw error;
     }
@@ -69,7 +90,8 @@ export class CircuitBreaker {
   // Manual open for maintenance windows. Fires the onOpen callback for
   // observability parity with organic trips, and leaves `failures` at 0 —
   // so `state: "open", failures: 0` in a snapshot is a legitimate combination
-  // (manual open) and not a sign of a counter bug.
+  // (manual open) and not a sign of a counter bug. `lastError` is undefined
+  // because there is no transport error to attribute the trip to.
   forceOpen(): void {
     this.transitionToOpen();
   }
@@ -79,6 +101,7 @@ export class CircuitBreaker {
     this.failures = 0;
     this.successes = 0;
     this.nextAttemptTime = null;
+    this.pendingLastError = undefined;
   }
 
   private onSuccess(): void {
@@ -91,10 +114,11 @@ export class CircuitBreaker {
     }
   }
 
-  private onFailure(): void {
+  private onFailure(message: string): void {
     if (this.state === "open") return;
     this.failures += 1;
     if (this.state === "half-open" || this.failures >= this.config.failureThreshold) {
+      this.pendingLastError = message;
       this.transitionToOpen();
     }
   }
@@ -103,12 +127,15 @@ export class CircuitBreaker {
     this.state = "open";
     this.successes = 0;
     this.nextAttemptTime = Date.now() + this.config.recoveryTimeoutMs;
-    this.onOpen();
+    const lastError = this.pendingLastError;
+    this.pendingLastError = undefined;
+    this.onOpen(lastError);
   }
 
   private transitionToHalfOpen(): void {
     this.state = "half-open";
     this.successes = 0;
+    this.onHalfOpen();
   }
 
   private transitionToClosed(): void {
@@ -116,5 +143,6 @@ export class CircuitBreaker {
     this.failures = 0;
     this.successes = 0;
     this.nextAttemptTime = null;
+    this.onClosed();
   }
 }

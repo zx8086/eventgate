@@ -72,10 +72,9 @@ describe("CircuitBreaker", () => {
   });
 
   it("does not trip on errors the predicate classifies as application-level", async () => {
-    const appOnly = new CircuitBreaker(
-      cfg,
-      (err) => !(err instanceof RangeError),
-    );
+    const appOnly = new CircuitBreaker(cfg, {
+      isTransportError: (err) => !(err instanceof RangeError),
+    });
     for (let i = 0; i < 5; i++) {
       await appOnly
         .execute(async () => {
@@ -119,8 +118,10 @@ describe("CircuitBreaker", () => {
 
   it("invokes the onOpen callback when transitioning to open", async () => {
     let opens = 0;
-    const b = new CircuitBreaker(cfg, undefined, () => {
-      opens += 1;
+    const b = new CircuitBreaker(cfg, {
+      onOpen: () => {
+        opens += 1;
+      },
     });
     for (let i = 0; i < 3; i++) {
       await b.execute(fail).catch(() => undefined);
@@ -130,8 +131,10 @@ describe("CircuitBreaker", () => {
 
   it("invokes onOpen each time half-open returns to open", async () => {
     let opens = 0;
-    const b = new CircuitBreaker(cfg, undefined, () => {
-      opens += 1;
+    const b = new CircuitBreaker(cfg, {
+      onOpen: () => {
+        opens += 1;
+      },
     });
     for (let i = 0; i < 3; i++) {
       await b.execute(fail).catch(() => undefined);
@@ -140,5 +143,44 @@ describe("CircuitBreaker", () => {
     await Bun.sleep(250);
     await b.execute(fail).catch(() => undefined);
     expect(opens).toBe(2);
+  });
+
+  it("passes the last transport error message into onOpen", async () => {
+    const opens: Array<string | undefined> = [];
+    const b = new CircuitBreaker(cfg, {
+      onOpen: (lastError) => opens.push(lastError),
+    });
+    for (let i = 0; i < 3; i++) {
+      await b.execute(async () => {
+        throw new Error("metadata failed 4 times.");
+      }).catch(() => undefined);
+    }
+    expect(opens).toHaveLength(1);
+    expect(opens[0]).toBe("metadata failed 4 times.");
+  });
+
+  it("passes undefined to onOpen when triggered by forceOpen()", () => {
+    const opens: Array<string | undefined> = [];
+    const b = new CircuitBreaker(cfg, {
+      onOpen: (lastError) => opens.push(lastError),
+    });
+    b.forceOpen();
+    expect(opens).toEqual([undefined]);
+  });
+
+  it("invokes onHalfOpen when the breaker transitions from open to half-open", async () => {
+    const events: string[] = [];
+    const b = new CircuitBreaker(cfg, {
+      onOpen: () => events.push("open"),
+      onHalfOpen: () => events.push("half-open"),
+    });
+    for (let i = 0; i < 3; i++) {
+      await b.execute(fail).catch(() => undefined);
+    }
+    expect(events).toEqual(["open"]);
+    await Bun.sleep(250);
+    // First execute after timeout triggers half-open before running the op.
+    await b.execute(succeed);
+    expect(events).toEqual(["open", "half-open"]);
   });
 });
