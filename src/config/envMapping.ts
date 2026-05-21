@@ -27,6 +27,11 @@ export type EnvOverrides = {
     probeTimeoutMs?: number;
     heartbeatMs?: number;
   };
+  breaker?: {
+    failureThreshold?: number;
+    successThreshold?: number;
+    recoveryTimeoutMs?: number;
+  };
   admin?: { token?: string };
   routesFile?: string;
   routes?: unknown[];
@@ -128,6 +133,11 @@ export function mapEnv(env: RawEnv): EnvOverrides {
       probeIntervalMs: num(env.HEALTH_PROBE_INTERVAL_MS),
       probeTimeoutMs: num(env.HEALTH_PROBE_TIMEOUT_MS),
       heartbeatMs: num(env.STATS_HEARTBEAT_MS),
+    }),
+    breaker: filterUndefined({
+      failureThreshold: num(env.CIRCUIT_BREAKER_FAILURE_THRESHOLD),
+      successThreshold: num(env.CIRCUIT_BREAKER_SUCCESS_THRESHOLD),
+      recoveryTimeoutMs: num(env.CIRCUIT_BREAKER_RECOVERY_TIMEOUT_MS),
     }),
   };
 
