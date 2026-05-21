@@ -39,6 +39,24 @@ const healthSchema = z.strictObject({
     .describe("Periodic stats-heartbeat interval in ms. 0 disables the heartbeat."),
 });
 
+const breakerSchema = z.strictObject({
+  failureThreshold: z
+    .number()
+    .int()
+    .min(1)
+    .describe("Consecutive transport failures before the breaker opens. Tunable via CIRCUIT_BREAKER_FAILURE_THRESHOLD."),
+  successThreshold: z
+    .number()
+    .int()
+    .min(1)
+    .describe("Consecutive successful probes in HALF_OPEN before the breaker closes. Tunable via CIRCUIT_BREAKER_SUCCESS_THRESHOLD."),
+  recoveryTimeoutMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .describe("How long to wait in OPEN before allowing a probe, in ms. Minimum 1s per circuit-breaker-guide §11 anti-pattern. Tunable via CIRCUIT_BREAKER_RECOVERY_TIMEOUT_MS."),
+});
+
 const routeSchema = z.strictObject({
   name: z.string().min(1).describe("Human-readable route id; used in logs and as the source Kafka header value."),
   path: z
@@ -220,6 +238,7 @@ export const configSchema = z
         .describe("Pending-row count above which the gateway logs a warn each iteration."),
     }),
     health: healthSchema,
+    breaker: breakerSchema,
     admin: z
       .strictObject({
         token: z
