@@ -33,6 +33,7 @@ function fakeMetrics(snap: DrainMetricsSnapshot) {
   return {
     recordPublished: () => {},
     recordError: () => {},
+    incrementBreakerOpenCount: () => {},
     snapshot: () => snap,
   };
 }
@@ -53,6 +54,7 @@ const emptyMetricsSnap: DrainMetricsSnapshot = {
   publishedLast60s: 0,
   lastPublishedAt: null,
   lastError: null,
+  breakerOpenCount: 0,
 };
 
 let snapshot: NodeJS.ProcessEnv;
@@ -234,6 +236,37 @@ describe("buildRoutes with multiple routes", () => {
     expect(body.dependencies.kafkaBroker.lastError).toMatch(/redpanda/);
   });
 
+  it("healthz body includes dependencies.kafkaProducer.breakerState", async () => {
+    const outbox = fakeOutbox();
+    const snapWithBreaker: HealthSnapshot = {
+      ...healthySnap,
+      dependencies: {
+        ...healthySnap.dependencies,
+        kafkaProducer: {
+          ok: true,
+          lastCheckedAt: 1_000,
+          connected: true,
+          breakerState: "open",
+          breakerNextAttemptAt: "2026-05-21T08:01:00.000Z",
+        },
+      },
+    };
+    const routes = buildRoutes({
+      producer: noopProducer,
+      outbox,
+      monitor: fakeMonitor(snapWithBreaker),
+      metrics: fakeMetrics(emptyMetricsSnap),
+    });
+    const healthz = routes["/healthz"] as () => Response;
+    const res = healthz();
+    expect(res.status).toBe(200); // kafkaProducer.ok is still true; breaker is informational
+    const body = await res.json() as {
+      dependencies: { kafkaProducer: { breakerState: string; breakerNextAttemptAt: string } };
+    };
+    expect(body.dependencies.kafkaProducer.breakerState).toBe("open");
+    expect(body.dependencies.kafkaProducer.breakerNextAttemptAt).toBe("2026-05-21T08:01:00.000Z");
+  });
+
   it("healthz includes outbox stats and drain metrics", async () => {
     const outbox = fakeOutbox();
     const routes = buildRoutes({
@@ -244,6 +277,7 @@ describe("buildRoutes with multiple routes", () => {
         publishedLast60s: 42,
         lastPublishedAt: 999,
         lastError: { topic: "T", message: "x", at: 500 },
+        breakerOpenCount: 0,
       }),
     });
     const healthz = routes["/healthz"] as () => Response;

@@ -7,9 +7,11 @@ export type DependencyStatus = {
   lastCheckedAt: number;
   lastError?: string;
   // Per-dependency extras (kept loose because each probe carries different metadata):
-  connected?: boolean;       // kafkaProducer
-  brokerProbeMs?: number;    // kafkaBroker
-  missing?: string[];        // topics
+  connected?: boolean;             // kafkaProducer
+  breakerState?: "closed" | "open" | "half-open";  // kafkaProducer (SIO-817)
+  breakerNextAttemptAt?: string;   // kafkaProducer (ISO timestamp, only when state === "open")
+  brokerProbeMs?: number;          // kafkaBroker
+  missing?: string[];              // topics
 };
 
 export type HealthSnapshot = {

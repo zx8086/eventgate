@@ -1,10 +1,12 @@
 // src/health/monitor.ts
 import { getLogger, type ILogger } from "../logging/index.ts";
 import type { OutboxDatabase } from "../outbox/db.ts";
+import type { CircuitBreakerSnapshot } from "../resilience/circuit-breaker.ts";
 import { probeOutboxDb, probeKafkaAdmin, type AdminLike } from "./probes.ts";
 import {
   DEFAULT_REQUIREDNESS,
   type DependencyName,
+  type DependencyStatus,
   type HealthSnapshot,
 } from "./types.ts";
 
@@ -15,7 +17,11 @@ export type HealthMonitor = {
   probeOnce(): Promise<void>;
 };
 
-type ProducerLike = { isConnected(): boolean };
+type ProducerLike = {
+  isConnected(): boolean;
+  // Optional so existing tests passing a bare { isConnected } still work.
+  getBreakerSnapshot?(): CircuitBreakerSnapshot;
+};
 
 export type HealthMonitorOptions = {
   producer: ProducerLike;
@@ -46,9 +52,19 @@ export function createHealthMonitor(opts: HealthMonitorOptions): HealthMonitor {
   const runProbeCycle = async (): Promise<HealthSnapshot> => {
     const checkedAt = Date.now();
     const producerOk = opts.producer.isConnected();
-    const deps: HealthSnapshot["dependencies"] = {
-      kafkaProducer: { ok: producerOk, lastCheckedAt: checkedAt, connected: producerOk },
+    const breakerSnap = opts.producer.getBreakerSnapshot?.();
+    const kafkaProducer: DependencyStatus = {
+      ok: producerOk,
+      lastCheckedAt: checkedAt,
+      connected: producerOk,
     };
+    if (breakerSnap !== undefined) {
+      kafkaProducer.breakerState = breakerSnap.state;
+      if (breakerSnap.state === "open" && breakerSnap.nextAttemptAt !== null) {
+        kafkaProducer.breakerNextAttemptAt = new Date(breakerSnap.nextAttemptAt).toISOString();
+      }
+    }
+    const deps: HealthSnapshot["dependencies"] = { kafkaProducer };
 
     if (opts.outboxDb) {
       deps.outboxDb = probeOutboxDb(opts.outboxDb);

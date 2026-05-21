@@ -8,7 +8,7 @@ import { createHealthAdmin } from "../health/admin.ts";
 import { createHealthMonitor } from "../health/monitor.ts";
 import { getLogger } from "../logging/index.ts";
 import { startHeartbeat, type HeartbeatHandle } from "../logging/heartbeat.ts";
-import { createProducer } from "../kafka/producer.ts";
+import { createProducerHandle, type ProducerHandle } from "../kafka/producerHandle.ts";
 import { createKafkaProvider } from "../kafka/providers/index.ts";
 import { closeOutbox, openOutbox, type OutboxDatabase } from "../outbox/db.ts";
 import { startDrainer, type DrainerHandle } from "../outbox/drainer.ts";
@@ -21,9 +21,18 @@ const log = getLogger("gateway");
 const provider = createKafkaProvider(config);
 log.info({ provider: provider.name, providerType: provider.type }, "kafka provider selected");
 
-const producer = await createProducer(config.kafka.clientId, provider);
-
 const drainMetrics = createDrainMetrics();
+
+const producer: ProducerHandle = await createProducerHandle(
+  config.kafka.clientId,
+  provider,
+  {
+    failureThreshold: config.breaker.failureThreshold,
+    successThreshold: config.breaker.successThreshold,
+    recoveryTimeoutMs: config.breaker.recoveryTimeoutMs,
+  },
+  () => drainMetrics.incrementBreakerOpenCount(),
+);
 
 let outboxDb: OutboxDatabase | undefined;
 let outboxWriter: OutboxWriter | undefined;
@@ -155,6 +164,10 @@ const heartbeat: HeartbeatHandle = startHeartbeat({
     const stats = outboxWriter?.backlogStats();
     return {
       producerConnected: snap.dependencies.kafkaProducer?.ok ?? false,
+      producerBreaker: {
+        state: producer.getBreakerSnapshot().state,
+        failures: producer.getBreakerSnapshot().failures,
+      },
       brokerOk: snap.dependencies.kafkaBroker?.ok ?? false,
       topicsOk: snap.dependencies.topics?.ok ?? true,
       status: snap.status,
@@ -168,6 +181,7 @@ const heartbeat: HeartbeatHandle = startHeartbeat({
         : {}),
       publishedLast60s: drain.publishedLast60s,
       lastPublishedAt: drain.lastPublishedAt,
+      breakerOpenCount: drain.breakerOpenCount,
     };
   },
 });

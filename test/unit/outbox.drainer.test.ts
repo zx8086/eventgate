@@ -4,6 +4,7 @@ import { closeOutbox, openOutbox, type OutboxDatabase } from "../../src/outbox/d
 import { createWriter, type EnqueueInput } from "../../src/outbox/writer.ts";
 import { runOutboxIteration } from "../../src/outbox/drainer.ts";
 import { createDrainMetrics } from "../../src/outbox/metrics.ts";
+import { CircuitBreakerOpenError } from "../../src/resilience/errors.ts";
 
 type Sent = { topic: string; key: string; value: string; headers?: Record<string, string> | null };
 
@@ -180,5 +181,56 @@ describe("runOutboxIteration metrics + error logging", () => {
     expect(snap.publishedLast60s).toBe(0);
     expect(snap.lastError?.topic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
     expect(snap.lastError?.message).toMatch(/forced failure/);
+  });
+});
+
+describe("runOutboxIteration CircuitBreakerOpenError handling", () => {
+  test("defers next_attempt_at and does NOT increment attempts when CBO is thrown", async () => {
+    const writer = createWriter(db);
+    seedTwoPending(writer);
+
+    const futureMs = Date.now() + 30_000;
+    const cboProducer = {
+      sendByTopic: async () => {
+        throw new CircuitBreakerOpenError(new Date(futureMs));
+      },
+    };
+
+    const result = await runOutboxIteration({ db, producer: cboProducer, config: cfg });
+
+    expect(result.published).toBe(0);
+    expect(result.retried).toBe(0);
+    expect(result.deferred).toBe(2);
+    const rows = db
+      .query("SELECT attempts, next_attempt_at, last_error FROM outbox")
+      .all() as Array<{ attempts: number; next_attempt_at: number; last_error: string }>;
+    for (const row of rows) {
+      expect(row.attempts).toBe(0); // unchanged from seeded value
+      expect(row.next_attempt_at).toBe(futureMs);
+      expect(row.last_error).toBe("circuit_breaker_open");
+    }
+  });
+
+  test("CBO does NOT trip the maxAge give-up path", async () => {
+    const writer = createWriter(db);
+    seedTwoPending(writer);
+    // Backdate the rows past maxAge.
+    db.query("UPDATE outbox SET created_at = $oldCreated, next_attempt_at = $now").run({
+      oldCreated: Date.now() - 25 * 60 * 60 * 1_000,
+      now: Date.now(),
+    });
+
+    const cboProducer = {
+      sendByTopic: async () => {
+        throw new CircuitBreakerOpenError(new Date(Date.now() + 60_000));
+      },
+    };
+
+    const result = await runOutboxIteration({ db, producer: cboProducer, config: cfg });
+
+    expect(result.failedPermanently).toBe(0); // age-out path is NOT taken on CBO
+    expect(result.deferred).toBe(2);
+    const rows = db.query("SELECT status FROM outbox").all() as Array<{ status: string }>;
+    expect(rows.every((r) => r.status === "pending")).toBe(true);
   });
 });

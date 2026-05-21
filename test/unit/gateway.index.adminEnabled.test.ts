@@ -31,6 +31,7 @@ const emptyMetricsSnap: DrainMetricsSnapshot = {
   publishedLast60s: 0,
   lastPublishedAt: null,
   lastError: null,
+  breakerOpenCount: 0,
 };
 
 const monitor = {
@@ -43,6 +44,7 @@ const monitor = {
 const metrics = {
   recordPublished: () => {},
   recordError: () => {},
+  incrementBreakerOpenCount: () => {},
   snapshot: () => emptyMetricsSnap,
 };
 
