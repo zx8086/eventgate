@@ -23,6 +23,7 @@ const emptyMetricsSnap: DrainMetricsSnapshot = {
   publishedLast60s: 0,
   lastPublishedAt: null,
   lastError: null,
+  breakerOpenCount: 0,
 };
 
 function fakeMonitor(snap: HealthSnapshot = healthySnap) {
@@ -38,6 +39,7 @@ function fakeMetrics(snap: DrainMetricsSnapshot = emptyMetricsSnap) {
   return {
     recordPublished: () => {},
     recordError: () => {},
+    incrementBreakerOpenCount: () => {},
     snapshot: () => snap,
   };
 }

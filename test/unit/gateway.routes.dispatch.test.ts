@@ -33,6 +33,7 @@ function fakeMetrics(snap: DrainMetricsSnapshot) {
   return {
     recordPublished: () => {},
     recordError: () => {},
+    incrementBreakerOpenCount: () => {},
     snapshot: () => snap,
   };
 }
@@ -53,6 +54,7 @@ const emptyMetricsSnap: DrainMetricsSnapshot = {
   publishedLast60s: 0,
   lastPublishedAt: null,
   lastError: null,
+  breakerOpenCount: 0,
 };
 
 let snapshot: NodeJS.ProcessEnv;
@@ -244,6 +246,7 @@ describe("buildRoutes with multiple routes", () => {
         publishedLast60s: 42,
         lastPublishedAt: 999,
         lastError: { topic: "T", message: "x", at: 500 },
+        breakerOpenCount: 0,
       }),
     });
     const healthz = routes["/healthz"] as () => Response;

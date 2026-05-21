@@ -4,11 +4,13 @@ export type DrainMetricsSnapshot = {
   publishedLast60s: number;
   lastPublishedAt: number | null;
   lastError: { topic: string; message: string; at: number } | null;
+  breakerOpenCount: number;
 };
 
 export type DrainMetrics = {
   recordPublished(topic: string): void;
   recordError(topic: string, message: string): void;
+  incrementBreakerOpenCount(): void;
   snapshot(): DrainMetricsSnapshot;
 };
 
@@ -25,6 +27,7 @@ export function createDrainMetrics(opts: DrainMetricsOptions = {}): DrainMetrics
   const publishedAt: number[] = [];
   let lastPublishedAt: number | null = null;
   let lastError: DrainMetricsSnapshot["lastError"] = null;
+  let breakerOpenCount = 0;
 
   const trim = (cutoff: number): void => {
     // publishedAt is push-only with monotonic timestamps, so a leading slice
@@ -48,6 +51,9 @@ export function createDrainMetrics(opts: DrainMetricsOptions = {}): DrainMetrics
       // recent failure reason visible after the drainer has recovered.
       lastError = { topic, message, at: now() };
     },
+    incrementBreakerOpenCount() {
+      breakerOpenCount += 1;
+    },
     snapshot(): DrainMetricsSnapshot {
       const cutoff = now() - windowMs;
       trim(cutoff);
@@ -55,6 +61,7 @@ export function createDrainMetrics(opts: DrainMetricsOptions = {}): DrainMetrics
         publishedLast60s: publishedAt.length,
         lastPublishedAt,
         lastError,
+        breakerOpenCount,
       };
     },
   };

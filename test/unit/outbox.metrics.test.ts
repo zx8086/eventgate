@@ -9,6 +9,7 @@ describe("DrainMetrics", () => {
       publishedLast60s: 0,
       lastPublishedAt: null,
       lastError: null,
+      breakerOpenCount: 0,
     });
   });
 
@@ -53,5 +54,20 @@ describe("DrainMetrics", () => {
     t = 2_000; m.recordPublished("T");
     expect(m.snapshot().lastError?.message).toBe("boom");
     expect(m.snapshot().publishedLast60s).toBe(1);
+  });
+});
+
+describe("DrainMetrics breakerOpenCount", () => {
+  it("starts at zero", () => {
+    const m = createDrainMetrics({ windowMs: 60_000, now: () => 1_000 });
+    expect(m.snapshot().breakerOpenCount).toBe(0);
+  });
+
+  it("increments on incrementBreakerOpenCount()", () => {
+    const m = createDrainMetrics({ windowMs: 60_000, now: () => 1_000 });
+    m.incrementBreakerOpenCount();
+    m.incrementBreakerOpenCount();
+    m.incrementBreakerOpenCount();
+    expect(m.snapshot().breakerOpenCount).toBe(3);
   });
 });
