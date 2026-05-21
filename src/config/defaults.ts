@@ -42,6 +42,11 @@ export const defaults = {
     probeTimeoutMs: 5_000,
     heartbeatMs: 60_000,
   },
+  breaker: {
+    failureThreshold: 5,
+    successThreshold: 3,
+    recoveryTimeoutMs: 60_000,
+  },
   routes: [
     {
       name: "elastic-autoops",
