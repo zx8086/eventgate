@@ -21,7 +21,7 @@ describe("CircuitBreaker", () => {
   let breaker: CircuitBreaker;
 
   beforeEach(() => {
-    breaker = new CircuitBreaker("test", cfg);
+    breaker = new CircuitBreaker(cfg);
   });
 
   it("starts closed", () => {
@@ -73,7 +73,6 @@ describe("CircuitBreaker", () => {
 
   it("does not trip on errors the predicate classifies as application-level", async () => {
     const appOnly = new CircuitBreaker(
-      "app",
       cfg,
       (err) => !(err instanceof RangeError),
     );
@@ -120,7 +119,7 @@ describe("CircuitBreaker", () => {
 
   it("invokes the onOpen callback when transitioning to open", async () => {
     let opens = 0;
-    const b = new CircuitBreaker("counted", cfg, undefined, () => {
+    const b = new CircuitBreaker(cfg, undefined, () => {
       opens += 1;
     });
     for (let i = 0; i < 3; i++) {
@@ -131,7 +130,7 @@ describe("CircuitBreaker", () => {
 
   it("invokes onOpen each time half-open returns to open", async () => {
     let opens = 0;
-    const b = new CircuitBreaker("counted", cfg, undefined, () => {
+    const b = new CircuitBreaker(cfg, undefined, () => {
       opens += 1;
     });
     for (let i = 0; i < 3; i++) {

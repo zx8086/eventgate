@@ -24,12 +24,10 @@ export class CircuitBreaker {
   private successes = 0;
   private nextAttemptTime: number | null = null;
 
-  // `name` is accepted positionally and reserved for downstream callers
-  // (e.g. log lines in ProducerHandle). The FSM itself is name-agnostic, so
-  // it's not stored as a field — keeps the class generic per
-  // circuit-breaker-guide §4.
+  // The FSM is name-agnostic. Callers that need a name for log lines or
+  // metric labels (e.g. ProducerHandle uses "kafka-producer") own that string
+  // themselves — keeps this class portable per circuit-breaker-guide §4.
   constructor(
-    _name: string,
     private readonly config: CircuitBreakerConfig,
     private readonly isTransportError: IsTransportError = () => true,
     private readonly onOpen: OnOpen = () => {},
@@ -68,6 +66,10 @@ export class CircuitBreaker {
     };
   }
 
+  // Manual open for maintenance windows. Fires the onOpen callback for
+  // observability parity with organic trips, and leaves `failures` at 0 —
+  // so `state: "open", failures: 0` in a snapshot is a legitimate combination
+  // (manual open) and not a sign of a counter bug.
   forceOpen(): void {
     this.transitionToOpen();
   }
