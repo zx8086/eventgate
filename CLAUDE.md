@@ -42,12 +42,16 @@ src/
     probes.ts             probeOutboxDb, probeKafkaAdmin (with timeout)
     monitor.ts            createHealthMonitor — cached snapshot + state-transition logging
     admin.ts              createHealthAdmin — long-lived @platformatic/kafka Admin client
+  resilience/             reusable resilience primitives (PR1: circuit breaker)
+    circuit-breaker.ts    CircuitBreaker FSM per guides/circuit-breaker-guide.md §4
+    errors.ts             CircuitBreakerOpenError + isApplicationLevelError predicate
   admin/                  /admin/routes endpoint (token-auth, hot reload)
     auth.ts               timing-safe X-Admin-Token verification
     routesFile.ts         atomic-write helpers for ROUTES_FILE
     routesEndpoint.ts     makeAdminRoutesHandler factory
   kafka/
     producer.ts           EventProducer wrapping @platformatic/kafka Producer (sendByTopic)
+    producerHandle.ts     wraps Producer + CircuitBreaker; implements EventProducer
     providers/
       types.ts            KafkaProvider, KafkaConnectionConfig, MskAuthMode
       errors.ts           KafkaProviderError + ProviderErrorCode
@@ -81,7 +85,7 @@ test/
 
 | Process | Entry | Responsibility |
 |---|---|---|
-| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — parse JSON, `outbox.enqueue(row)` (single SQLite insert), return 202. Non-JSON bodies get 400; outbox enqueue failures return 500. The outbox drainer (`src/outbox/drainer.ts`) publishes to Kafka in the background with exponential backoff. `/healthz` reads a cached `HealthMonitor` snapshot. Returns 200 when the producer is connected and the outbox DB is reachable; 200 + `status: "degraded"` when the kafkaBroker probe (`Admin.listTopics`) or topics probe fails (gateway keeps buffering, ALB stays in rotation); 503 only when a required dependency (producer or outbox DB) fails. Required deps are `kafkaProducer` and `outboxDb`; the broker probe is informational because not every broker we deploy against exposes a portable Admin path. Response includes `dependencies.{kafkaProducer, outboxDb, kafkaBroker, topics}`, `outbox.{pendingByTopic, publishedLast60s, lastPublishedAt, lastError}` plus existing fields. `OUTBOX_ENABLED=false` falls back to inline publish (escape hatch). |
+| **gateway** | `src/gateway/index.ts` | `POST /webhooks/elastic/autoops` — parse JSON, `outbox.enqueue(row)` (single SQLite insert), return 202. Non-JSON bodies get 400; outbox enqueue failures return 500. The outbox drainer (`src/outbox/drainer.ts`) publishes to Kafka in the background with exponential backoff. `/healthz` reads a cached `HealthMonitor` snapshot. Returns 200 when the producer is connected and the outbox DB is reachable; 200 + `status: "degraded"` when the kafkaBroker probe (`Admin.listTopics`) or topics probe fails (gateway keeps buffering, ALB stays in rotation); 503 only when a required dependency (producer or outbox DB) fails. Required deps are `kafkaProducer` and `outboxDb`; the broker probe is informational because not every broker we deploy against exposes a portable Admin path. Response includes `dependencies.{kafkaProducer, outboxDb, kafkaBroker, topics}`, `outbox.{pendingByTopic, publishedLast60s, lastPublishedAt, lastError}` plus existing fields. `OUTBOX_ENABLED=false` falls back to inline publish (escape hatch). Producer publishes flow through a circuit breaker (SIO-817). Five consecutive transport failures open the breaker; subsequent calls fail fast with `CircuitBreakerOpenError`, which the drainer treats as "defer this row until the breaker probes again" — no `attempts++` and no false maxAge give-up. Breaker state surfaces in `dependencies.kafkaProducer.breakerState` and the 60s heartbeat. HTTP status code is unchanged in this PR. |
 
 Add new downstream behavior (Slack, PagerDuty, aggregates, sinks into a database) as a **separate consumer service** on `ops.elastic.autoops.raw.v1` (or a future `events.v1` published by a downstream normalizer) — never bolt it into the gateway.
 
@@ -149,6 +153,7 @@ config.kafka.{provider, clientId, brokers, msk:{region, clusterArn, authMode}, c
 config.observability.{logLevel}
 config.outbox.{enabled, dbPath, batchSize, backoffMaxMs, maxAgeHours, idlePollMs, busyPollMs, backlogWarnThreshold}
 config.health.{probeIntervalMs, probeTimeoutMs, heartbeatMs}
+config.breaker.{failureThreshold, successThreshold, recoveryTimeoutMs}
 config.routes[].{name, path, topic, dlqTopic, sourceHeader, keyFields, idempotency}
 ```
 
