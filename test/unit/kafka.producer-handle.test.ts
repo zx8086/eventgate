@@ -135,7 +135,71 @@ describe("ProducerHandle", () => {
     }
     const opened = logs.filter((l) => l.msg === "circuit breaker opened");
     expect(opened.length).toBe(1);
-    expect((opened[0]!.obj as { event_name: string }).event_name).toBe("circuit_breaker_opened");
-    expect((opened[0]!.obj as { breaker: string }).breaker).toBe("kafka-producer");
+    const openedObj = opened[0]!.obj as {
+      event_name: string;
+      breaker: string;
+      from: string;
+      failures: number;
+      next_attempt_at?: string;
+    };
+    expect(openedObj.event_name).toBe("circuit_breaker_opened");
+    expect(openedObj.breaker).toBe("kafka-producer");
+    expect(openedObj.from).toBe("closed");
+    expect(openedObj.failures).toBe(3);
+    expect(typeof openedObj.next_attempt_at).toBe("string");
+  });
+
+  it("logs half-open and closed transitions through the full recovery cycle", async () => {
+    // Inner producer that fails 3 times then succeeds forever — drives the
+    // full closed -> open -> half-open -> closed cycle.
+    let calls = 0;
+    const inner = {
+      isConnected: () => true,
+      disconnect: async () => {},
+      sendByTopic: async () => {
+        calls += 1;
+        if (calls <= 3) throw new Error("metadata failed 4 times.");
+      },
+    };
+    const logs: Array<{ obj: object; msg: string }> = [];
+    const fakeLogger = {
+      info: (obj: unknown, msg?: string) => logs.push({ obj: obj as object, msg: (msg ?? "") as string }),
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      trace: () => {},
+      fatal: () => {},
+      child: () => fakeLogger,
+      flush: () => {},
+    };
+    const handle = createProducerHandleFromInner(inner, cfg, undefined, fakeLogger);
+
+    // Trip the breaker.
+    for (let i = 0; i < 3; i++) {
+      await handle.sendByTopic("T", String(i), "v", null).catch(() => undefined);
+    }
+    expect(handle.getBreakerSnapshot().state).toBe("open");
+
+    // Wait past recoveryTimeoutMs (200ms) so the next call probes.
+    await Bun.sleep(250);
+
+    // First success after timeout: opens the half-open probe and succeeds —
+    // state becomes "half-open" (successThreshold is 2, so not yet closed).
+    await handle.sendByTopic("T", "probe-1", "v", null);
+    expect(handle.getBreakerSnapshot().state).toBe("half-open");
+
+    // Second success: reaches successThreshold and closes.
+    await handle.sendByTopic("T", "probe-2", "v", null);
+    expect(handle.getBreakerSnapshot().state).toBe("closed");
+
+    const halfOpenLogs = logs.filter((l) => l.msg === "circuit breaker half-open");
+    expect(halfOpenLogs.length).toBe(1);
+    expect((halfOpenLogs[0]!.obj as { event_name: string; from: string }).event_name).toBe("circuit_breaker_half_open");
+    expect((halfOpenLogs[0]!.obj as { from: string }).from).toBe("open");
+
+    const closedLogs = logs.filter((l) => l.msg === "circuit breaker closed");
+    expect(closedLogs.length).toBe(1);
+    expect((closedLogs[0]!.obj as { event_name: string; from: string }).event_name).toBe("circuit_breaker_closed");
+    expect((closedLogs[0]!.obj as { from: string }).from).toBe("half-open");
   });
 });
