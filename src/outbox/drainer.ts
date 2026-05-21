@@ -1,5 +1,6 @@
 // src/outbox/drainer.ts
 import { getLogger } from "../logging/index.ts";
+import { CircuitBreakerOpenError } from "../resilience/errors.ts";
 import { nextDelayMs } from "./backoff.ts";
 import type { OutboxDatabase } from "./db.ts";
 import type { DrainMetrics } from "./metrics.ts";
@@ -32,6 +33,7 @@ export type IterationResult = {
   published: number;
   retried: number;
   failedPermanently: number;
+  deferred: number;
 };
 
 type PendingRow = {
@@ -85,10 +87,14 @@ export async function runOutboxIteration(opts: {
   const markFailed = db.query(
     `UPDATE outbox SET status='failed', attempts=$attempts, last_error=$err WHERE id=$id`,
   );
+  const markDeferred = db.query(
+    `UPDATE outbox SET next_attempt_at=$next, last_error=$err WHERE id=$id`,
+  );
 
   let published = 0;
   let retried = 0;
   let failedPermanently = 0;
+  let deferred = 0;
 
   for (const row of pending) {
     const kafkaTopic = row.topic;
@@ -99,6 +105,17 @@ export async function runOutboxIteration(opts: {
       published += 1;
       metrics?.recordPublished(row.topic);
     } catch (err) {
+      if (err instanceof CircuitBreakerOpenError) {
+        const nextMs = err.nextAttemptAt.getTime();
+        markDeferred.run({ id: row.id, next: nextMs, err: "circuit_breaker_open" });
+        deferred += 1;
+        metrics?.recordError(row.topic, "circuit_breaker_open");
+        log.debug(
+          { topic: row.topic, id: row.id, nextAttemptAt: err.nextAttemptAt },
+          "publish deferred; breaker open",
+        );
+        continue;
+      }
       const attempts = row.attempts + 1;
       const ageMs = Date.now() - row.created_at;
       const message = err instanceof Error ? err.message : String(err);
@@ -127,7 +144,7 @@ export async function runOutboxIteration(opts: {
     }
   }
 
-  return { scanned: pending.length, published, retried, failedPermanently };
+  return { scanned: pending.length, published, retried, failedPermanently, deferred };
 }
 
 export type DrainerHandle = {
