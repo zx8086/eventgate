@@ -43,6 +43,13 @@ describe("config.breaker", () => {
     expect(() => config.breaker).toThrow(/failureThreshold/);
   });
 
+  it("rejects successThreshold below 1", async () => {
+    process.env = { ...process.env, CIRCUIT_BREAKER_SUCCESS_THRESHOLD: "0" };
+    resetConfigCache();
+    const { config } = await import("../../src/config/index.ts");
+    expect(() => config.breaker).toThrow(/successThreshold/);
+  });
+
   it("rejects recoveryTimeoutMs below 1000", async () => {
     process.env = { ...process.env, CIRCUIT_BREAKER_RECOVERY_TIMEOUT_MS: "500" };
     resetConfigCache();
