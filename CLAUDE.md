@@ -108,12 +108,39 @@ When `ADMIN_TOKEN` (min 32 chars) and `ROUTES_FILE` (path to a writable JSON fil
 
 Without `ADMIN_TOKEN`, the endpoint is not registered (returns 404). Without `ROUTES_FILE`, it is also not registered — the gateway logs a warning and refuses to enable an in-memory-only admin surface that would be lost on restart.
 
-`/healthz` and `/admin/routes` are reserved paths; any config route attempting to declare them fails startup with a Zod error.
+`/healthz`, `/admin/routes`, `/admin/dlq`, and `/admin/replay` are reserved paths (with `/admin/dlq/*` and `/admin/replay/*` as reserved subtree prefixes); any config route attempting to declare them fails startup with a Zod error.
 
 | Env var | Purpose |
 |---|---|
-| `ADMIN_TOKEN` | Shared secret for `/admin/routes`. Min 32 chars. Endpoint disabled when unset. |
-| `ROUTES_FILE` | Path to mounted JSON file holding the routes array. Required alongside `ADMIN_TOKEN` for the admin endpoint to register. Read on startup; takes precedence over `ROUTES_JSON`. |
+| `ADMIN_TOKEN` | Shared secret for every `/admin/*` endpoint. Min 32 chars. Endpoints disabled when unset. |
+| `ROUTES_FILE` | Path to mounted JSON file holding the routes array. Required alongside `ADMIN_TOKEN` for the `PUT /admin/routes` endpoint to register. Read on startup; takes precedence over `ROUTES_JSON`. |
+
+### DLQ replay subsystem (SIO-827, ships in 5 phases — see docs/architecture/dlq-replay.md)
+
+When `ADMIN_TOKEN` AND `REPLAY_ENABLED=true` are both set, the gateway registers five admin endpoints for triaged, attempt-capped replay of records that Connect sinks have dropped into `DLQ_T_*` topics:
+
+- `GET  /admin/dlq` — per-route + per-partition depth + last-job summary (Phase 3 populates depth)
+- `POST /admin/replay/:route` — bulk: `{ partition, dryRun=true, fromOffset?, toOffset?, maxRecords?, filter? }` → 202 `{ jobId }`
+- `POST /admin/replay/:route/message` — single: `{ partition, offset, dryRun=true }` → 200 `{ decision, replayed, parked }`
+- `GET  /admin/replay/:jobId` — job status
+- `POST /admin/replay/:jobId/cancel` — cancel
+
+Phase 1 ships dry-run paths only (triage stubbed, jobStore in-memory, SQLite tables and real produce/park deferred to Phases 2-5). Re-produces preserve the original `idempotencyKey` (and every non-`__connect.errors.*` header) as raw `Buffer`, strip Connect dead-letter headers, and stamp audit headers (`x-eventgate-replay-{attempt,job-id,at,source-topic,source-offset}`). Flows through the existing `ProducerHandle` so the circuit breaker covers replay automatically. Feature stays fully off when `REPLAY_ENABLED` is unset (`config.replay === undefined`).
+
+| Env var | Purpose |
+|---|---|
+| `REPLAY_ENABLED` | Master switch (default false). |
+| `REPLAY_MAX_ATTEMPTS` | Loop-guard cap via `x-eventgate-replay-attempt` header (default 5). |
+| `REPLAY_TRANSIENT_ERRORS` | CSV of exception class names classified as Transient (replay). |
+| `REPLAY_POISON_ERRORS` | CSV of exception class names classified as Poison (park). |
+| `REPLAY_DEFAULT` | `park` \| `replay` — fallback when class matches neither list (default park). |
+| `REPLAY_MAX_RECORDS_PER_JOB` | Per-job ceiling (default 10000). |
+| `REPLAY_RATE_LIMIT_PER_SEC` | Token-bucket throttle used in Phase 4 (default 500). |
+| `REPLAY_PARKING_TOPIC_SUFFIX` | Suffix for parked records; empty string disables parking-topic write (default `.parked`). |
+| `REPLAY_AUTO_ENABLED` | Phase 5 scheduler on/off (default false). |
+| `REPLAY_AUTO_INTERVAL_MS` | Scheduler tick (min 60000, default 300000). |
+| `REPLAY_AUTO_DLQ_DEPTH_THRESHOLD` | Auto-replay when depth >= this (default 100). |
+| `REPLAY_AUTO_PROBE_WINDOW_RECORDS` | Bounded probe-job window when `Admin.listOffsets` fails — Redpanda fallback (default 500). |
 
 ### Kafka provider factory
 

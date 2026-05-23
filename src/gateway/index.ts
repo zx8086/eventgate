@@ -1,6 +1,7 @@
 // src/gateway/index.ts
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
+import { makeReplayHandlers } from "../admin/replayEndpoint.ts";
 import { config } from "../config/index.ts";
 import { resetConfigCache } from "../config/loader.ts";
 import type { RouteConfig } from "../config/schemas.ts";
@@ -14,7 +15,12 @@ import { closeOutbox, openOutbox, type OutboxDatabase } from "../outbox/db.ts";
 import { startDrainer, type DrainerHandle } from "../outbox/drainer.ts";
 import { createDrainMetrics } from "../outbox/metrics.ts";
 import { createWriter, type OutboxWriter } from "../outbox/writer.ts";
-import { buildRoutes } from "./routes.ts";
+import { createReplayConsumer } from "../replay/consumer.ts";
+import {
+  createReplayJobStore,
+  type ReplayJobStore,
+} from "../replay/jobStore.ts";
+import { buildRoutes, type ReplayContext } from "./routes.ts";
 
 const log = getLogger("gateway");
 
@@ -77,6 +83,32 @@ const monitor = createHealthMonitor({
 });
 await monitor.start();
 
+// Replay subsystem. Only wired when BOTH ADMIN_TOKEN and REPLAY_ENABLED are
+// set — REPLAY_ENABLED alone is meaningless without an auth gate. When off,
+// jobStore is undefined and routes.ts skips endpoint registration.
+let replayJobStore: ReplayJobStore | undefined;
+let replayContext: ReplayContext | undefined;
+if (config.admin?.token && config.replay?.enabled) {
+  replayJobStore = createReplayJobStore();
+  const routesByName = new Map<string, RouteConfig>(
+    config.routes.map((r) => [r.name, r]),
+  );
+  const handlers = makeReplayHandlers({
+    expectedToken: config.admin.token,
+    jobStore: replayJobStore,
+    routes: routesByName,
+    producer,
+    admin: healthAdmin,
+    createConsumer: (route, jobId) => createReplayConsumer(provider, route, jobId),
+  });
+  replayContext = { handlers };
+  log.info({ replay: true }, "replay subsystem enabled");
+} else if (config.replay?.enabled && !config.admin?.token) {
+  log.warn(
+    "REPLAY_ENABLED=true but ADMIN_TOKEN unset; replay subsystem disabled (auth gate is mandatory)",
+  );
+}
+
 let server: ReturnType<typeof Bun.serve> | undefined;
 
 function rebuildRoutes(newRoutes?: RouteConfig[]): ReturnType<typeof buildRoutes> {
@@ -100,6 +132,7 @@ function rebuildRoutes(newRoutes?: RouteConfig[]): ReturnType<typeof buildRoutes
     monitor,
     metrics: drainMetrics,
     adminContext,
+    replayContext,
   });
 }
 
@@ -190,6 +223,10 @@ async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
   server?.stop();
   heartbeat.stop();
+  // Cancel any in-flight replay jobs FIRST so their AbortControllers fire
+  // before the producer + provider close out from under them. Each job's
+  // own finally block closes its consumer.
+  if (replayJobStore) replayJobStore.cancelAll();
   await monitor.stop();
   await healthAdmin.close();
   if (drainer) await drainer.stop();
