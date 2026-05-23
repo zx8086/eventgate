@@ -11,15 +11,27 @@ import { getLogger } from "../logging/index.ts";
 import { startHeartbeat, type HeartbeatHandle } from "../logging/heartbeat.ts";
 import { createProducerHandle, type ProducerHandle } from "../kafka/producerHandle.ts";
 import { createKafkaProvider } from "../kafka/providers/index.ts";
-import { closeOutbox, openOutbox, type OutboxDatabase } from "../outbox/db.ts";
+import {
+  closeOutbox,
+  openOutbox,
+  runReplayMigrations,
+  sweepReplayGhostJobs,
+  type OutboxDatabase,
+} from "../outbox/db.ts";
 import { startDrainer, type DrainerHandle } from "../outbox/drainer.ts";
 import { createDrainMetrics } from "../outbox/metrics.ts";
 import { createWriter, type OutboxWriter } from "../outbox/writer.ts";
 import { createReplayConsumer } from "../replay/consumer.ts";
 import {
+  createDlqInspector,
+  type DlqDepthCache,
+} from "../replay/dlqInspector.ts";
+import {
   createReplayJobStore,
+  createSqliteReplayJobStore,
   type ReplayJobStore,
 } from "../replay/jobStore.ts";
+import { createReplayScheduler, type ReplayScheduler } from "../replay/scheduler.ts";
 import { buildRoutes, type ReplayContext } from "./routes.ts";
 
 const log = getLogger("gateway");
@@ -88,20 +100,77 @@ await monitor.start();
 // jobStore is undefined and routes.ts skips endpoint registration.
 let replayJobStore: ReplayJobStore | undefined;
 let replayContext: ReplayContext | undefined;
+let dlqInspector: DlqDepthCache | undefined;
+let replayScheduler: ReplayScheduler | undefined;
 if (config.admin?.token && config.replay?.enabled) {
-  replayJobStore = createReplayJobStore();
+  // Persistent SQLite store when the outbox is on (shared DB); fall back to
+  // in-memory if outbox is disabled (escape hatch — replay state then dies
+  // with the process, but the outbox escape hatch already implies "don't
+  // expect durable buffering").
+  if (outboxDb !== undefined) {
+    runReplayMigrations(outboxDb);
+    const swept = sweepReplayGhostJobs(outboxDb);
+    if (swept > 0) {
+      log.info({ swept }, "replay: marked orphaned jobs failed (ghost-job sweep)");
+    }
+    replayJobStore = createSqliteReplayJobStore(outboxDb);
+  } else {
+    replayJobStore = createReplayJobStore();
+    log.warn("replay: outbox disabled, using in-memory jobStore (jobs do not survive restart)");
+  }
+
   const routesByName = new Map<string, RouteConfig>(
     config.routes.map((r) => [r.name, r]),
   );
+
+  // dlqInspector: per-partition depth cache. Reuses healthAdmin (long-lived
+  // Admin client). HealthAdmin re-exports metadata + listOffsets so the
+  // structural match against DlqAdminLike is direct.
+  dlqInspector = createDlqInspector({
+    admin: healthAdmin,
+    routes: config.routes,
+    probeIntervalMs: config.health.probeIntervalMs,
+  });
+  dlqInspector.start();
+
+  const groupCleanup = async (groupId: string): Promise<void> => {
+    await healthAdmin.deleteGroups({ groups: [groupId] });
+  };
   const handlers = makeReplayHandlers({
     expectedToken: config.admin.token,
+    cfg: config.replay,
     jobStore: replayJobStore,
     routes: routesByName,
     producer,
     admin: healthAdmin,
-    createConsumer: (route, jobId) => createReplayConsumer(provider, route, jobId),
+    createConsumer: (route, jobId) =>
+      createReplayConsumer(provider, route, jobId, groupCleanup),
+    dlqDepth: dlqInspector,
   });
   replayContext = { handlers };
+
+  // Scheduler (Phase 5). Off by default; reads dlqInspector cache and fires
+  // bounded replay jobs when a (route, partition) depth meets the threshold.
+  if (config.replay.auto.enabled) {
+    replayScheduler = createReplayScheduler({
+      cfg: config.replay,
+      routes: config.routes,
+      dlqDepth: dlqInspector,
+      jobStore: replayJobStore,
+      producer,
+      createConsumer: (route, jobId) =>
+        createReplayConsumer(provider, route, jobId, groupCleanup),
+    });
+    replayScheduler.start();
+    log.info(
+      {
+        intervalMs: config.replay.auto.intervalMs,
+        threshold: config.replay.auto.dlqDepthThreshold,
+      },
+      "replay scheduler started",
+    );
+  }
+
   log.info({ replay: true }, "replay subsystem enabled");
 } else if (config.replay?.enabled && !config.admin?.token) {
   log.warn(
@@ -223,10 +292,12 @@ async function shutdown(signal: string) {
   log.info({ signal }, "shutting down gateway");
   server?.stop();
   heartbeat.stop();
-  // Cancel any in-flight replay jobs FIRST so their AbortControllers fire
-  // before the producer + provider close out from under them. Each job's
-  // own finally block closes its consumer.
+  // Stop the scheduler tick first so no NEW replay jobs spawn during
+  // teardown; THEN cancel in-flight jobs so their AbortControllers fire
+  // before the producer + provider close out from under them.
+  if (replayScheduler) await replayScheduler.stop();
   if (replayJobStore) replayJobStore.cancelAll();
+  if (dlqInspector) dlqInspector.stop();
   await monitor.stop();
   await healthAdmin.close();
   if (drainer) await drainer.stop();

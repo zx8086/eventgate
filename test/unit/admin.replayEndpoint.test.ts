@@ -1,14 +1,31 @@
 // test/unit/admin.replayEndpoint.test.ts
 import { describe, expect, it } from "bun:test";
 import { makeReplayHandlers } from "../../src/admin/replayEndpoint.ts";
-import type { RouteConfig } from "../../src/config/schemas.ts";
+import type { ReplayConfig, RouteConfig } from "../../src/config/schemas.ts";
 import type { HealthAdmin } from "../../src/health/admin.ts";
-import type { EventProducer } from "../../src/kafka/producer.ts";
+import type { EventProducer, ProducerHeaders } from "../../src/kafka/producer.ts";
 import type { ReplayConsumer } from "../../src/replay/consumer.ts";
 import { createReplayJobStore } from "../../src/replay/jobStore.ts";
 import type { DlqRecord } from "../../src/replay/types.ts";
 
 const TOKEN = "x".repeat(40);
+
+const BASE_CFG: ReplayConfig = {
+  enabled: true,
+  maxAttempts: 5,
+  transientErrors: ["org.apache.kafka.common.errors.RetriableException"],
+  poisonErrors: ["org.apache.kafka.connect.errors.DataException"],
+  default: "park",
+  maxRecordsPerJob: 100,
+  rateLimitPerSec: 1000,
+  parkingTopicSuffix: ".parked",
+  auto: {
+    enabled: false,
+    intervalMs: 300_000,
+    dlqDepthThreshold: 100,
+    probeWindowRecords: 500,
+  },
+};
 
 function route(): RouteConfig {
   return {
@@ -23,18 +40,42 @@ function route(): RouteConfig {
 }
 
 function fakeAdmin(): HealthAdmin {
-  return {
+  // Endpoint tests never touch metadata / listOffsets / deleteGroups
+  // (those are exercised by dlqInspector tests + the real broker smoke).
+  // Cast through unknown to keep the fake minimal.
+  const stub = {
     listTopics: async () => ["DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS"],
     close: async () => {},
+    metadata: async () => {
+      throw new Error("metadata not used by endpoint tests");
+    },
+    listOffsets: async () => {
+      throw new Error("listOffsets not used by endpoint tests");
+    },
+    deleteGroups: async () => {
+      throw new Error("deleteGroups not used by endpoint tests");
+    },
   };
+  return stub as unknown as HealthAdmin;
 }
 
-function fakeProducer(): EventProducer {
-  return {
-    sendByTopic: async () => {},
+type ProducerCall = {
+  topic: string;
+  key: string;
+  value: string;
+  headers?: ProducerHeaders;
+};
+
+function makeProducer(): { producer: EventProducer; calls: ProducerCall[] } {
+  const calls: ProducerCall[] = [];
+  const producer: EventProducer = {
+    sendByTopic: async (topic, key, value, headers) => {
+      calls.push({ topic, key, value, headers });
+    },
     isConnected: () => true,
     disconnect: async () => {},
   };
+  return { producer, calls };
 }
 
 type ConsumerOverrides = {
@@ -59,20 +100,23 @@ function fakeConsumerFactory(overrides: ConsumerOverrides = {}) {
   };
 }
 
-function makeDeps(overrides: ConsumerOverrides = {}) {
+function makeDeps(overrides: ConsumerOverrides = {}, cfg: ReplayConfig = BASE_CFG) {
   const r = route();
   const jobStore = createReplayJobStore();
+  const { producer, calls } = makeProducer();
   return {
     handlers: makeReplayHandlers({
       expectedToken: TOKEN,
+      cfg,
       jobStore,
       routes: new Map([[r.name, r]]),
-      producer: fakeProducer(),
+      producer,
       admin: fakeAdmin(),
       createConsumer: fakeConsumerFactory(overrides),
     }),
     jobStore,
     route: r,
+    producerCalls: calls,
   };
 }
 
@@ -193,7 +237,7 @@ describe("singleReplay", () => {
       headers: [
         [
           Buffer.from("__connect.errors.exception.class.name"),
-          Buffer.from("org.apache.kafka.connect.errors.RetriableException"),
+          Buffer.from("org.apache.kafka.common.errors.RetriableException"),
         ],
         [Buffer.from("idempotencyKey"), Buffer.from("abc-123")],
       ],
@@ -214,7 +258,7 @@ describe("singleReplay", () => {
     };
     expect(body.decision.kind).toBe("replay");
     expect(body.decision.exceptionClass).toBe(
-      "org.apache.kafka.connect.errors.RetriableException",
+      "org.apache.kafka.common.errors.RetriableException",
     );
     expect(body.replayed).toBe(false);
     expect(body.dryRun).toBe(true);
@@ -232,36 +276,122 @@ describe("singleReplay", () => {
     expect(headersByName["x-eventgate-replay-source-offset"]).toBe("0:42");
   });
 
-  it("returns 202 + failed status when dryRun=false (deferred to later phase)", async () => {
+  it("non-dry-run replay with transient class produces to the SOURCE topic", async () => {
     const rec: DlqRecord = {
       topic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
       partition: 0,
-      offset: 1,
-      key: Buffer.from("k"),
-      value: Buffer.from("v"),
-      headers: [],
+      offset: 7,
+      key: Buffer.from("rk"),
+      value: Buffer.from("rv"),
+      headers: [
+        [
+          Buffer.from("__connect.errors.exception.class.name"),
+          Buffer.from("org.apache.kafka.common.errors.RetriableException"),
+        ],
+        [Buffer.from("idempotencyKey"), Buffer.from("opaque-id")],
+      ],
       timestamp: Date.now(),
     };
-    const { handlers, jobStore } = makeDeps({ fetchResult: rec });
+    const { handlers, producerCalls } = makeDeps({ fetchResult: rec });
     const req = authedReq("http://x/admin/replay/elastic-autoops/message", {
       method: "POST",
-      body: JSON.stringify({ partition: 0, offset: 1, dryRun: false }),
+      body: JSON.stringify({ partition: 0, offset: 7, dryRun: false }),
     });
     const res = await handlers.singleReplay(req);
-    expect(res.status).toBe(202);
-    const body = (await res.json()) as { decision: { kind: string }; message: string };
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      decision: { kind: string };
+      replayed: boolean;
+      parked: boolean;
+      targetTopic: string;
+    };
     expect(body.decision.kind).toBe("replay");
-    expect(body.message).toMatch(/non-dry-run/);
-    // Job should be marked failed with the deferral lastError.
-    let found = false;
-    for (const j of [jobStore].flatMap(() => [])) {
-      void j;
-    }
-    // We can't list jobs directly through the store API; instead verify via
-    // the next branch's behaviour: the deferred path always sets a known
-    // lastError, which any future Phase 2 test will assert.
-    found = true;
-    expect(found).toBe(true);
+    expect(body.replayed).toBe(true);
+    expect(body.parked).toBe(false);
+    expect(body.targetTopic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
+    expect(producerCalls).toHaveLength(1);
+    expect(producerCalls[0]?.topic).toBe("T_PRIVATE_SOURCE_ELASTIC_AUTOOPS");
+    // Headers passed through normalizeHeaders preserve idempotencyKey.
+    const headers = producerCalls[0]?.headers as Array<
+      [string, string | Buffer | null]
+    >;
+    const byName = Object.fromEntries(
+      headers.map(([k, v]) => [k, v instanceof Buffer ? v.toString("utf-8") : v]),
+    );
+    expect(byName["idempotencyKey"]).toBe("opaque-id");
+    expect(byName["x-eventgate-replay-attempt"]).toBe("1");
+    expect(byName["__connect.errors.exception.class.name"]).toBeUndefined();
+  });
+
+  it("non-dry-run park with poison class produces to the PARKING topic", async () => {
+    const rec: DlqRecord = {
+      topic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      partition: 0,
+      offset: 8,
+      key: Buffer.from("pk"),
+      value: Buffer.from("pv"),
+      headers: [
+        [
+          Buffer.from("__connect.errors.exception.class.name"),
+          Buffer.from("org.apache.kafka.connect.errors.DataException"),
+        ],
+      ],
+      timestamp: Date.now(),
+    };
+    const { handlers, producerCalls } = makeDeps({ fetchResult: rec });
+    const req = authedReq("http://x/admin/replay/elastic-autoops/message", {
+      method: "POST",
+      body: JSON.stringify({ partition: 0, offset: 8, dryRun: false }),
+    });
+    const res = await handlers.singleReplay(req);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      decision: { kind: string; reason?: string };
+      replayed: boolean;
+      parked: boolean;
+      targetTopic: string;
+    };
+    expect(body.decision.kind).toBe("park");
+    expect(body.parked).toBe(true);
+    expect(body.replayed).toBe(false);
+    expect(body.targetTopic).toBe(
+      "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS.parked",
+    );
+    expect(producerCalls[0]?.topic).toBe(
+      "T_PRIVATE_SOURCE_ELASTIC_AUTOOPS.parked",
+    );
+  });
+
+  it("non-dry-run park with empty parkingTopicSuffix is count-only (no produce)", async () => {
+    const rec: DlqRecord = {
+      topic: "DLQ_T_PRIVATE_SOURCE_ELASTIC_AUTOOPS",
+      partition: 0,
+      offset: 9,
+      key: Buffer.from("k"),
+      value: Buffer.from("v"),
+      headers: [
+        [
+          Buffer.from("__connect.errors.exception.class.name"),
+          Buffer.from("org.apache.kafka.connect.errors.DataException"),
+        ],
+      ],
+      timestamp: Date.now(),
+    };
+    const cfg = { ...BASE_CFG, parkingTopicSuffix: "" };
+    const { handlers, producerCalls } = makeDeps({ fetchResult: rec }, cfg);
+    const req = authedReq("http://x/admin/replay/elastic-autoops/message", {
+      method: "POST",
+      body: JSON.stringify({ partition: 0, offset: 9, dryRun: false }),
+    });
+    const res = await handlers.singleReplay(req);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      decision: { kind: string };
+      parked: boolean;
+    };
+    expect(body.decision.kind).toBe("park");
+    expect(body.parked).toBe(true);
+    expect(producerCalls).toHaveLength(0);
   });
 
   it("returns 500 with a consumer error message when fetchOne throws", async () => {
@@ -312,17 +442,22 @@ describe("bulkReplay", () => {
     expect(body.dryRun).toBe(true);
   });
 
-  it("returns 202 + failed status when dryRun=false (deferred)", async () => {
-    const { handlers } = makeDeps();
+  it("returns 202 + running status when dryRun=false (real bulk replay runs async)", async () => {
+    const { handlers } = makeDeps({ streamRecords: [] });
     const req = authedReq("http://x/admin/replay/elastic-autoops", {
       method: "POST",
       body: JSON.stringify({ partition: 0, dryRun: false }),
     });
     const res = await handlers.bulkReplay(req);
     expect(res.status).toBe(202);
-    const body = (await res.json()) as { status: string; message: string };
-    expect(body.status).toBe("failed");
-    expect(body.message).toMatch(/non-dry-run/);
+    const body = (await res.json()) as {
+      status: string;
+      dryRun: boolean;
+      jobId: string;
+    };
+    expect(body.status).toBe("running");
+    expect(body.dryRun).toBe(false);
+    expect(body.jobId).toMatch(/[0-9a-f-]{36}/);
   });
 });
 

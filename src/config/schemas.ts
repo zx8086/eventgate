@@ -39,7 +39,7 @@ const healthSchema = z.strictObject({
     .describe("Periodic stats-heartbeat interval in ms. 0 disables the heartbeat."),
 });
 
-const replaySchema = z.strictObject({
+export const replaySchema = z.strictObject({
   enabled: z
     .boolean()
     .describe(
@@ -382,3 +382,4 @@ export const configSchema = z
   });
 
 export type AppConfig = z.infer<typeof configSchema>;
+export type ReplayConfig = z.infer<typeof replaySchema>;

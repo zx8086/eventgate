@@ -5,6 +5,12 @@ import type { KafkaProvider } from "../kafka/providers/index.ts";
 import { getLogger } from "../logging/index.ts";
 import type { DlqRecord, HeaderTuple } from "./types.ts";
 
+// Optional fire-and-forget consumer-group cleanup. Wired by the gateway to
+// healthAdmin.deleteGroups (reuses the existing long-lived Admin client).
+// Failures are warn-logged but never propagate — group cleanup is hygiene,
+// not correctness.
+export type GroupCleanup = (groupId: string) => Promise<void>;
+
 const log = getLogger("replay.consumer");
 
 export type StreamRangeOpts = {
@@ -61,11 +67,12 @@ export async function createReplayConsumer(
   provider: KafkaProvider,
   route: RouteConfig,
   jobId: string,
+  groupCleanup?: GroupCleanup,
 ): Promise<ReplayConsumer> {
   const conn = await provider.getConnectionConfig();
-  // Per-job group id; UUIDv4-based so we never reuse and never interfere with
-  // a real downstream consumer group. Phase 4 will add fire-and-forget
-  // Admin.deleteGroups cleanup in finally(); Phase 1 relies on broker retention.
+  // Per-job group id; UUIDv4-based (via jobId) so we never reuse and never
+  // interfere with a real downstream consumer group. groupCleanup is invoked
+  // fire-and-forget on close() so stale groups don't accumulate on the broker.
   const groupId = `eventgate-replay-${route.name}-${jobId}`;
 
   const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
@@ -152,6 +159,16 @@ export async function createReplayConsumer(
 
     async close() {
       await consumer.close();
+      // Fire-and-forget group cleanup. Warn-log on failure; never throw.
+      if (groupCleanup !== undefined) {
+        groupCleanup(groupId).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(
+            { groupId, err: message },
+            "replay group cleanup failed",
+          );
+        });
+      }
     },
   };
 }

@@ -1,6 +1,6 @@
 # DLQ Replay (eventgate)
 
-> In-process replay subsystem for records that downstream Kafka Connect sinks have dropped into a route's companion `DLQ_T_*` topic. Single-process, behind a master `REPLAY_ENABLED` switch + the existing `ADMIN_TOKEN` gate. Ships in five incremental phases; only Phase 1 (API scaffold + dry-run paths) is live today.
+> In-process replay subsystem for records that downstream Kafka Connect sinks have dropped into a route's companion `DLQ_T_*` topic. Single-process, behind a master `REPLAY_ENABLED` switch + the existing `ADMIN_TOKEN` gate. **All 5 phases shipped:** triage, attempt cap, SQLite-backed jobs + per-partition watermarks, `/admin/dlq` depth probe, real bulk replay with rate limit + parking + breaker-pause, optional auto-replay scheduler.
 
 ## Problem
 
@@ -64,7 +64,7 @@ operator (or scheduler in Phase 5)
    │
    ▼ jobStore.update(jobId, {scanned, replayed, parked, lastOffset, status})
    │
-   ▼ consumer.close()  →  Admin.deleteGroups({ groups: [groupId] })  (Phase 4 hygiene)
+   ▼ consumer.close()  →  Admin.deleteGroups({ groups: [groupId] })  (fire-and-forget hygiene)
 ```
 
 ## File layout
@@ -73,14 +73,15 @@ operator (or scheduler in Phase 5)
 src/replay/
   types.ts          DlqRecord, TriageDecision, ReplayJob, ReplayBatchResult
   headers.ts        readHeader (iteration via Buffer.equals), strip, stamp, parseAttempt
-  consumer.ts       createReplayConsumer(provider, route, jobId)
-                    → { streamRange, fetchOne, close }
-  runner.ts         runReplayBatchDryRun (Phase 1)
-                    → runReplayBatch (Phase 4, with rate limit + parking + breaker handling)
-  jobStore.ts       Phase 1: in-memory; Phase 3: SQLite-backed (replay_jobs, replay_state)
-  triage.ts         (Phase 2) pure triage(rec, cfg, currentAttempt)
-  dlqInspector.ts   (Phase 3) Admin.listOffsets-based depth probe + cache
-  scheduler.ts      (Phase 5) auto-replay loop
+  triage.ts         pure triage(rec, cfg) — transient/poison classification + loop guard
+  consumer.ts       createReplayConsumer(provider, route, jobId, groupCleanup?)
+                    → { streamRange, fetchOne, close }; close fires groupCleanup fire-and-forget
+  runner.ts         runReplayBatchDryRun + runReplayBatch (token-bucket rate limit, breaker-aware)
+  jobStore.ts       createReplayJobStore (in-memory) + createSqliteReplayJobStore (persistent)
+                    terminal-state sticky via WHERE NOT IN ('done','failed','cancelled')
+  dlqInspector.ts   Admin.metadata + Admin.listOffsets per-partition depth; in-memory cache
+                    with depthError + ageMs surfacing; Redpanda-safe (depth=null degrade)
+  scheduler.ts      auto-replay loop; tickInFlight skip + hasActiveJob gate
 
 src/admin/
   replayEndpoint.ts makeReplayHandlers(deps) → { listDlq, bulkReplay, singleReplay, jobStatus, cancelJob }
@@ -134,9 +135,9 @@ Tables are created only when `config.replay?.enabled === true` (via `runReplayMi
 | `REPLAY_POISON_ERRORS` | `[]` | CSV of exception class names → park |
 | `REPLAY_DEFAULT` | `park` | Fallback decision when class matches neither list |
 | `REPLAY_MAX_RECORDS_PER_JOB` | `10000` | Per-job ceiling |
-| `REPLAY_RATE_LIMIT_PER_SEC` | `500` | Token-bucket throttle (Phase 4) |
+| `REPLAY_RATE_LIMIT_PER_SEC` | `500` | Token-bucket throttle (per-job) |
 | `REPLAY_PARKING_TOPIC_SUFFIX` | `.parked` | Empty string disables parking-topic write |
-| `REPLAY_AUTO_ENABLED` | `false` | Scheduler on/off (Phase 5) |
+| `REPLAY_AUTO_ENABLED` | `false` | Scheduler on/off |
 | `REPLAY_AUTO_INTERVAL_MS` | `300000` | Scheduler tick |
 | `REPLAY_AUTO_DLQ_DEPTH_THRESHOLD` | `100` | Auto-replay when depth ≥ this |
 | `REPLAY_AUTO_PROBE_WINDOW_RECORDS` | `500` | Bounded probe job when listOffsets fails |
@@ -155,7 +156,7 @@ Therefore `src/replay/headers.ts` `readHeader()` MUST iterate the headers via `B
 
 ### Redpanda `Admin.listOffsets`
 
-Per `project_redpanda_admin_probe_incompat.md`, some Admin operations fail against Redpanda in production. Phase 3 will smoke-test `Admin.listOffsets` against the project's Redpanda compose; if it works, `/admin/dlq` calls it live, otherwise the response carries `depth: null + depthError` (error class only, 200-char cap) and the scheduler falls back to a bounded probe job. Result will be appended here once Phase 3 lands.
+Per `project_redpanda_admin_probe_incompat.md`, some Admin operations fail against Redpanda in production. The dlqInspector is **degrade-tolerant by design**: when `Admin.metadata` or `Admin.listOffsets` throws, the inspector preserves the last good per-partition depth in the cache and stamps every entry with `depthError` (error class only, 200-char cap). `/admin/dlq` therefore always responds 200, and operators distinguish "depth unknown" from "depth = 0" via the explicit `depth: null + depthError` fields. The scheduler skips partitions whose depth is `null` so it never fires a job blind. A post-merge smoke test against the project's Redpanda compose will confirm whether the happy or the degrade path is the live one in dev; the code handles both either way.
 
 ### Replay vs the outbox
 
