@@ -156,7 +156,19 @@ Therefore `src/replay/headers.ts` `readHeader()` MUST iterate the headers via `B
 
 ### Redpanda `Admin.listOffsets`
 
-Per `project_redpanda_admin_probe_incompat.md`, some Admin operations fail against Redpanda in production. The dlqInspector is **degrade-tolerant by design**: when `Admin.metadata` or `Admin.listOffsets` throws, the inspector preserves the last good per-partition depth in the cache and stamps every entry with `depthError` (error class only, 200-char cap). `/admin/dlq` therefore always responds 200, and operators distinguish "depth unknown" from "depth = 0" via the explicit `depth: null + depthError` fields. The scheduler skips partitions whose depth is `null` so it never fires a job blind. A post-merge smoke test against the project's Redpanda compose will confirm whether the happy or the degrade path is the live one in dev; the code handles both either way.
+Per `project_redpanda_admin_probe_incompat.md`, some Admin operations fail against Redpanda in production. The dlqInspector is **degrade-tolerant by design**: when `Admin.metadata` or `Admin.listOffsets` throws, the inspector preserves the last good per-partition depth in the cache and stamps every entry with `depthError` (error class only, 200-char cap). `/admin/dlq` therefore always responds 200, and operators distinguish "depth unknown" from "depth = 0" via the explicit `depth: null + depthError` fields. The scheduler skips partitions whose depth is `null` so it never fires a job blind.
+
+**Smoke result (Redpanda v25.3.14, local compose, 2026-05-23):** the happy path is live. Both `Admin.metadata({topics:[dlqTopic]})` and `Admin.listOffsets({topics:[{name, partitions:[{partitionIndex, timestamp: -1|-2}]}]})` respond normally; per-partition depth is computed correctly:
+
+```json
+"partitions": [
+  { "partition": 0, "depth": 2, "observedAt": 1779571845063, "ageMs": 10303 },
+  { "partition": 1, "depth": 0, "observedAt": 1779571845063, "ageMs": 10303 },
+  { "partition": 2, "depth": 0, "observedAt": 1779571845063, "ageMs": 10303 }
+]
+```
+
+The MSK / Confluent Cloud behaviour against the same `@platformatic/kafka` 2.1.0 client has not been re-verified in this commit; the degrade path ships regardless, so a regression on those brokers would surface as `depthError` rather than 5xx — operators will see it in `/admin/dlq` and the scheduler will skip the affected route until depth is known.
 
 ### Replay vs the outbox
 
@@ -181,6 +193,29 @@ UPDATE replay_jobs
 ```
 
 Same shape as the drainer's age-out behavior. Operators see crashed jobs as `failed`, not as forever-`running`.
+
+### Operational prerequisite: pre-create the parking topic
+
+The parking topic (`<routeTopic><cfg.parkingTopicSuffix>`, default `<topic>.parked`) must exist on the broker before a non-dry-run replay can park a record. The gateway does **not** auto-create it — same convention as the DLQ topic, which is also externally provisioned. When the parking topic is missing, a park-targeting produce fails with `Unknown topic <…>.parked` and the runner counts an `errors++` for that record, never pauses, never crashes — but the operator sees a stuck `parked: 0, errors: N` in `/admin/replay/:jobId`.
+
+Verified during the 2026-05-23 smoke: before pre-creating the parking topic, a bulk run with one transient + one poison record produced `replayed: 1, parked: 0, errors: 1, lastError: "Unknown topic T_PRIVATE_SOURCE_ELASTIC_AUTOOPS.parked."`. After `rpk topic create T_PRIVATE_SOURCE_ELASTIC_AUTOOPS.parked -p 3`, the next single-message park ran cleanly with `parked: true` and the record landed on the parking topic with audit headers intact and `attempt: "0"` (spec §"On park" — no attempt bump).
+
+**Ops checklist:** when adding a new route, provision three topics: `<sourceTopic>`, `DLQ_T_<sourceTopic>` (Connect writes here), and `<sourceTopic><parkingSuffix>` (eventgate writes parked records here). Or set `REPLAY_PARKING_TOPIC_SUFFIX=""` to disable the parking-topic write (park decisions become count-only).
+
+### End-to-end smoke (2026-05-23)
+
+Exercised against the project's local Redpanda compose with two synthetic DLQ records on partition 0 (offset 0: transient `RetriableException`; offset 1: poison `DataException`). All five endpoints responded as specified:
+
+| Endpoint | Result |
+|---|---|
+| `GET /admin/dlq` | per-partition depths populated, `depthError` absent |
+| `POST /admin/replay/:route/message` (dry-run, transient) | `decision.kind="replay"`, `targetTopic=T_PRIVATE_SOURCE_ELASTIC_AUTOOPS`, `wouldStampHeaders` shows stripped Connect headers + preserved `idempotencyKey` + audit headers with `attempt: "1"` |
+| `POST /admin/replay/:route/message` (dry-run, poison) | `decision={kind:"park", reason:"poison_class"}`, `targetTopic=…parked`, `attempt: "0"` |
+| `POST /admin/replay/:route/message` (non-dry-run, transient) | `replayed: true`; verified via `rpk consume`: record on source topic with `idempotencyKey: smoke-idem-abc-123` preserved bit-for-bit |
+| `POST /admin/replay/:route` (bulk, async) | `202 { jobId, status: "running" }`; subsequent `GET /admin/replay/:jobId` showed terminal `status: "done"` with correct counters |
+| `POST /admin/replay/:route/message` (non-dry-run, poison, after parking topic created) | `parked: true`; record on `…parked` topic with audit headers intact |
+
+The Phase 5 scheduler was not exercised in this run (`REPLAY_AUTO_ENABLED=false`); its unit tests (`test/unit/replay.scheduler.test.ts`) cover the threshold gating, `tickInFlight` overlap protection, and resume-from-watermark behaviour.
 
 ### Per-job consumer-group cleanup
 
