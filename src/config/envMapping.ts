@@ -35,6 +35,42 @@ export type EnvOverrides = {
   admin?: { token?: string };
   routesFile?: string;
   routes?: unknown[];
+  replay?: {
+    enabled?: boolean;
+    maxAttempts?: number;
+    transientErrors?: string[];
+    poisonErrors?: string[];
+    default?: string;
+    maxRecordsPerJob?: number;
+    rateLimitPerSec?: number;
+    parkingTopicSuffix?: string;
+    auto?: {
+      enabled?: boolean;
+      intervalMs?: number;
+      dlqDepthThreshold?: number;
+      probeWindowRecords?: number;
+    };
+  };
+};
+
+// Defaults applied when the replay block is attached. Lives here so the
+// schema (which makes `replay` optional) stays the single source of truth on
+// presence/absence; only the values are filled in.
+const REPLAY_DEFAULTS = {
+  enabled: false,
+  maxAttempts: 5,
+  transientErrors: [] as string[],
+  poisonErrors: [] as string[],
+  default: "park" as const,
+  maxRecordsPerJob: 10_000,
+  rateLimitPerSec: 500,
+  parkingTopicSuffix: ".parked",
+  auto: {
+    enabled: false,
+    intervalMs: 300_000,
+    dlqDepthThreshold: 100,
+    probeWindowRecords: 500,
+  },
 };
 
 function str(v: string | undefined): string | undefined {
@@ -154,6 +190,56 @@ export function mapEnv(env: RawEnv): EnvOverrides {
   const routesFileEnv = str(env.ROUTES_FILE);
   if (routesFileEnv !== undefined) {
     overrides.routesFile = routesFileEnv;
+  }
+
+  // Replay block: attach iff REPLAY_ENABLED is truthy OR any REPLAY_* sub-key
+  // is set. When attached, fill the full schema with defaults and overlay env
+  // overrides. When absent, config.replay stays undefined (feature off).
+  const replayEnabled = bool(env.REPLAY_ENABLED);
+  const replayMaxAttempts = num(env.REPLAY_MAX_ATTEMPTS);
+  const replayTransient = csv(env.REPLAY_TRANSIENT_ERRORS);
+  const replayPoison = csv(env.REPLAY_POISON_ERRORS);
+  const replayDefault = str(env.REPLAY_DEFAULT);
+  const replayMaxRecords = num(env.REPLAY_MAX_RECORDS_PER_JOB);
+  const replayRateLimit = num(env.REPLAY_RATE_LIMIT_PER_SEC);
+  const replayParkingSuffix = str(env.REPLAY_PARKING_TOPIC_SUFFIX);
+  const replayAutoEnabled = bool(env.REPLAY_AUTO_ENABLED);
+  const replayAutoInterval = num(env.REPLAY_AUTO_INTERVAL_MS);
+  const replayAutoThreshold = num(env.REPLAY_AUTO_DLQ_DEPTH_THRESHOLD);
+  const replayAutoProbe = num(env.REPLAY_AUTO_PROBE_WINDOW_RECORDS);
+
+  const anyReplaySubkey =
+    replayMaxAttempts !== undefined ||
+    replayTransient !== undefined ||
+    replayPoison !== undefined ||
+    replayDefault !== undefined ||
+    replayMaxRecords !== undefined ||
+    replayRateLimit !== undefined ||
+    replayParkingSuffix !== undefined ||
+    replayAutoEnabled !== undefined ||
+    replayAutoInterval !== undefined ||
+    replayAutoThreshold !== undefined ||
+    replayAutoProbe !== undefined;
+
+  if (replayEnabled !== undefined || anyReplaySubkey) {
+    overrides.replay = {
+      ...REPLAY_DEFAULTS,
+      ...(replayEnabled !== undefined ? { enabled: replayEnabled } : {}),
+      ...(replayMaxAttempts !== undefined ? { maxAttempts: replayMaxAttempts } : {}),
+      ...(replayTransient !== undefined ? { transientErrors: replayTransient } : {}),
+      ...(replayPoison !== undefined ? { poisonErrors: replayPoison } : {}),
+      ...(replayDefault !== undefined ? { default: replayDefault } : {}),
+      ...(replayMaxRecords !== undefined ? { maxRecordsPerJob: replayMaxRecords } : {}),
+      ...(replayRateLimit !== undefined ? { rateLimitPerSec: replayRateLimit } : {}),
+      ...(replayParkingSuffix !== undefined ? { parkingTopicSuffix: replayParkingSuffix } : {}),
+      auto: {
+        ...REPLAY_DEFAULTS.auto,
+        ...(replayAutoEnabled !== undefined ? { enabled: replayAutoEnabled } : {}),
+        ...(replayAutoInterval !== undefined ? { intervalMs: replayAutoInterval } : {}),
+        ...(replayAutoThreshold !== undefined ? { dlqDepthThreshold: replayAutoThreshold } : {}),
+        ...(replayAutoProbe !== undefined ? { probeWindowRecords: replayAutoProbe } : {}),
+      },
+    };
   }
 
   for (const k of Object.keys(overrides) as (keyof EnvOverrides)[]) {
