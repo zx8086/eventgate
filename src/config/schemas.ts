@@ -39,6 +39,73 @@ const healthSchema = z.strictObject({
     .describe("Periodic stats-heartbeat interval in ms. 0 disables the heartbeat."),
 });
 
+const replaySchema = z.strictObject({
+  enabled: z
+    .boolean()
+    .describe(
+      "Master switch for the DLQ replay subsystem. When false, /admin/dlq and /admin/replay/* endpoints are not registered and the replay_jobs/replay_state SQLite tables are not created.",
+    ),
+  maxAttempts: z
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      "Replay loop-guard cap. A record with x-eventgate-replay-attempt >= this value is parked instead of replayed.",
+    ),
+  transientErrors: z
+    .array(z.string().min(1))
+    .describe(
+      "Exception class names (matched against __connect.errors.exception.class.name) classified as Transient → replay.",
+    ),
+  poisonErrors: z
+    .array(z.string().min(1))
+    .describe(
+      "Exception class names classified as Poison → park (sent to the parking topic when configured).",
+    ),
+  default: z
+    .enum(["park", "replay"])
+    .describe(
+      "Fallback decision when the exception class matches neither the transient nor poison list.",
+    ),
+  maxRecordsPerJob: z
+    .number()
+    .int()
+    .positive()
+    .describe("Ceiling on records processed per replay job."),
+  rateLimitPerSec: z
+    .number()
+    .int()
+    .positive()
+    .describe("Token-bucket throttle applied to producer.sendByTopic during bulk replay (Phase 4)."),
+  parkingTopicSuffix: z
+    .string()
+    .describe(
+      "Suffix appended to the route's source topic when sending parked records. Empty string disables the parking-topic write (count-only).",
+    ),
+  auto: z
+    .strictObject({
+      enabled: z.boolean().describe("Scheduler on/off (Phase 5)."),
+      intervalMs: z
+        .number()
+        .int()
+        .min(60_000)
+        .describe("Scheduler tick interval in ms. Minimum 60s to avoid broker chatter."),
+      dlqDepthThreshold: z
+        .number()
+        .int()
+        .positive()
+        .describe("Auto-replay triggers when DLQ depth for a (route, partition) meets or exceeds this value."),
+      probeWindowRecords: z
+        .number()
+        .int()
+        .positive()
+        .describe(
+          "Fallback when Admin.listOffsets fails (e.g. Redpanda incompat): scan up to N records from the last watermark as a depth proxy.",
+        ),
+    })
+    .describe("Auto-replay scheduler configuration."),
+});
+
 const breakerSchema = z.strictObject({
   failureThreshold: z
     .number()
@@ -253,6 +320,11 @@ export const configSchema = z
       .min(1)
       .optional()
       .describe("Path to a mounted JSON file holding the routes array. When set, takes precedence over ROUTES_JSON."),
+    replay: replaySchema
+      .optional()
+      .describe(
+        "DLQ replay subsystem. Absent when REPLAY_ENABLED is unset; populated (with defaults) the moment any REPLAY_* env var is set.",
+      ),
     routes: routesSchema,
   })
   .superRefine((cfg, ctx) => {
