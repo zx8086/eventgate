@@ -1,10 +1,11 @@
 // src/admin/replayEndpoint.ts
 import { z } from "zod";
-import type { RouteConfig } from "../config/schemas.ts";
+import type { ReplayConfig, RouteConfig } from "../config/schemas.ts";
 import type { HealthAdmin } from "../health/admin.ts";
 import type { EventProducer } from "../kafka/producer.ts";
 import { getLogger } from "../logging/index.ts";
 import type { ReplayConsumer } from "../replay/consumer.ts";
+import type { DlqDepthCache } from "../replay/dlqInspector.ts";
 import {
   parseAttempt,
   readHeader,
@@ -12,18 +13,21 @@ import {
   stripConnectHeaders,
 } from "../replay/headers.ts";
 import type { ReplayJobStore } from "../replay/jobStore.ts";
-import { runReplayBatchDryRun } from "../replay/runner.ts";
+import { runReplayBatch, runReplayBatchDryRun } from "../replay/runner.ts";
+import { triage } from "../replay/triage.ts";
 import { verifyAdminToken } from "./auth.ts";
 
 const log = getLogger("admin.replayEndpoint");
 
 export type ReplayDeps = {
   expectedToken: string;
+  cfg: ReplayConfig;
   jobStore: ReplayJobStore;
   routes: ReadonlyMap<string, RouteConfig>;
   producer: EventProducer;
   admin: HealthAdmin;
   createConsumer: (route: RouteConfig, jobId: string) => Promise<ReplayConsumer>;
+  dlqDepth?: DlqDepthCache;
 };
 
 const singleBodySchema = z.strictObject({
@@ -78,24 +82,20 @@ export type ReplayHandlers = {
 };
 
 export function makeReplayHandlers(deps: ReplayDeps): ReplayHandlers {
-  const { expectedToken, jobStore, routes, producer, createConsumer } = deps;
+  const { expectedToken, cfg, jobStore, routes, producer, createConsumer, dlqDepth } = deps;
 
   return {
-    // Phase 3 will populate per-partition depth via Admin.listOffsets + cache;
-    // Phase 1 returns an empty partitions array so operators have a stable
-    // shape to script against.
     listDlq: async (req) => {
       if (!verifyAdminToken(req.headers.get("x-admin-token"), expectedToken)) {
         return unauthorized();
       }
-      return Response.json({
-        routes: [...routes.values()].map((r) => ({
-          route: r.name,
-          dlqTopic: r.dlqTopic,
-          partitions: [],
-          lastJob: null,
-        })),
-      });
+      const out = [...routes.values()].map((r) => ({
+        route: r.name,
+        dlqTopic: r.dlqTopic,
+        partitions: dlqDepth?.get(r.name) ?? [],
+        lastJob: jobStore.lastJobForRoute?.(r.name) ?? null,
+      }));
+      return Response.json({ routes: out });
     },
 
     bulkReplay: async (req) => {
@@ -140,27 +140,6 @@ export function makeReplayHandlers(deps: ReplayDeps): ReplayHandlers {
         toOffset: parsed.data.toOffset,
       });
 
-      // Non-dry-run is accepted but deferred to Phase 4 (real bulk runner with
-      // triage + rate limit + parking). For Phase 1 we mark the job failed
-      // immediately with a clear lastError so the operator knows what happened.
-      if (!parsed.data.dryRun) {
-        jobStore.update(job.id, {
-          status: "failed",
-          lastError: "bulk_non_dryrun_not_implemented_yet",
-          finishedAt: Date.now(),
-        });
-        return Response.json(
-          {
-            jobId: job.id,
-            status: "failed",
-            dryRun: false,
-            message: "bulk replay (non-dry-run) ships in a later phase",
-          },
-          { status: 202 },
-        );
-      }
-
-      // Dry-run runs asynchronously so the HTTP response is non-blocking.
       const ctl = new AbortController();
       jobStore.setCancelHandle(job.id, ctl);
       jobStore.update(job.id, { status: "running" });
@@ -176,21 +155,47 @@ export function makeReplayHandlers(deps: ReplayDeps): ReplayHandlers {
               maxRecords: parsed.data.maxRecords ?? DEFAULT_MAX_RECORDS,
               signal: ctl.signal,
             });
-            const result = await runReplayBatchDryRun({
-              records: stream,
-              producer,
-            });
-            jobStore.update(job.id, {
-              ...result,
-              status: "done",
-              finishedAt: Date.now(),
-            });
+
+            if (parsed.data.dryRun) {
+              const result = await runReplayBatchDryRun({
+                records: stream,
+                producer,
+              });
+              jobStore.update(job.id, {
+                ...result,
+                status: "done",
+                finishedAt: Date.now(),
+              });
+            } else {
+              const result = await runReplayBatch({
+                records: stream,
+                producer,
+                cfg,
+                jobId: job.id,
+                route,
+                signal: ctl.signal,
+                onProgress: (snapshot) => jobStore.update(job.id, snapshot),
+              });
+              const terminalStatus = result.paused ? "paused" : "done";
+              jobStore.update(job.id, {
+                scanned: result.scanned,
+                replayed: result.replayed,
+                parked: result.parked,
+                skipped: result.skipped,
+                errors: result.errors,
+                lastOffset: result.lastOffset,
+                status: terminalStatus,
+                lastError: result.lastError,
+                nextResumeAt: result.nextResumeAt,
+                finishedAt: Date.now(),
+              });
+            }
           } finally {
             await consumer.close();
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          log.warn({ jobId: job.id, err: message }, "bulk dry-run failed");
+          log.warn({ jobId: job.id, err: message }, "bulk run failed");
           jobStore.update(job.id, {
             status: "failed",
             lastError: message,
@@ -200,7 +205,7 @@ export function makeReplayHandlers(deps: ReplayDeps): ReplayHandlers {
       })();
 
       return Response.json(
-        { jobId: job.id, status: "running", dryRun: true },
+        { jobId: job.id, status: "running", dryRun: parsed.data.dryRun },
         { status: 202 },
       );
     },
@@ -277,17 +282,38 @@ export function makeReplayHandlers(deps: ReplayDeps): ReplayHandlers {
           const attempt = parseAttempt(
             readHeader(rec, "x-eventgate-replay-attempt"),
           );
-          const exceptionClass =
-            readHeader(rec, "__connect.errors.exception.class.name") ?? null;
-          const decision = { kind: "replay" as const, exceptionClass };
+          const decision = triage(rec, cfg);
 
-          // Non-dry-run single is deferred until Phase 2 ships real triage —
-          // we should not actually re-produce without the classification logic
-          // in place.
-          if (!parsed.data.dryRun) {
+          // Build the headers we WOULD send so the response is always
+          // informative — in dry-run we never produce; in real mode we send
+          // these exact headers via the producer.
+          const targetTopic =
+            decision.kind === "replay"
+              ? route.topic
+              : cfg.parkingTopicSuffix === ""
+                ? null
+                : route.topic + cfg.parkingTopicSuffix;
+          // Park records do NOT bump the attempt counter (spec §"On park"):
+          // it represents how many times we have tried to *replay* this
+          // record into the source topic. Parking is a terminal classification
+          // for this attempt, not a re-attempt.
+          const nextAttempt =
+            decision.kind === "replay" ? attempt + 1 : attempt;
+          const headersOut = stampAuditHeaders(
+            stripConnectHeaders(rec.headers),
+            {
+              jobId: job.id,
+              sourceTopic: rec.topic,
+              partition: rec.partition,
+              offset: rec.offset,
+              attempt: nextAttempt,
+            },
+          );
+
+          if (parsed.data.dryRun) {
             jobStore.update(job.id, {
-              status: "failed",
-              lastError: "single_non_dryrun_not_implemented_yet",
+              status: "done",
+              scanned: 1,
               finishedAt: Date.now(),
             });
             return Response.json(
@@ -295,39 +321,67 @@ export function makeReplayHandlers(deps: ReplayDeps): ReplayHandlers {
                 decision,
                 replayed: false,
                 parked: false,
-                message:
-                  "non-dry-run single-message replay ships in a later phase",
+                dryRun: true,
+                targetTopic,
+                wouldStampHeaders: headersOut.map(([k, v]) => ({
+                  name: k?.toString("utf-8") ?? null,
+                  value: v?.toString("utf-8") ?? null,
+                })),
               },
-              { status: 202 },
+              { status: 200 },
             );
           }
 
-          // Build the headers we WOULD send so the response is informative.
-          // No actual produce in dry-run.
-          const wouldSend = stampAuditHeaders(stripConnectHeaders(rec.headers), {
-            jobId: job.id,
-            sourceTopic: rec.topic,
-            partition: rec.partition,
-            offset: rec.offset,
-            attempt: attempt + 1,
-          });
+          // Real non-dry-run path: produce to the target topic.
+          if (targetTopic === null) {
+            // Park decision with empty parkingTopicSuffix => count-only.
+            jobStore.update(job.id, {
+              status: "done",
+              scanned: 1,
+              parked: 1,
+              finishedAt: Date.now(),
+            });
+            return Response.json(
+              { decision, replayed: false, parked: true, dryRun: false },
+              { status: 200 },
+            );
+          }
 
+          // Producer requires string key/value. The DlqRecord carries raw
+          // Buffer key/value; we pass them through utf-8 because the gateway
+          // only ever produces utf-8 keys/values (string serializers).
+          const keyStr = rec.key === null ? "" : rec.key.toString("utf-8");
+          const valueStr = rec.value === null ? "" : rec.value.toString("utf-8");
+          // Convert raw HeaderTuple array to the array-of-tuples form
+          // ProducerHeaders accepts. Null keys are skipped (spec: a missing
+          // key is not addressable Kafka-side and the SDK rejects).
+          const headersArr: Array<[string, string | Buffer | null]> = [];
+          for (const [k, v] of headersOut) {
+            if (k === null) continue;
+            headersArr.push([k.toString("utf-8"), v]);
+          }
+
+          await producer.sendByTopic(targetTopic, keyStr, valueStr, headersArr);
+          if (decision.kind === "replay") {
+            jobStore.update(job.id, {
+              status: "done",
+              scanned: 1,
+              replayed: 1,
+              finishedAt: Date.now(),
+            });
+            return Response.json(
+              { decision, replayed: true, parked: false, dryRun: false, targetTopic },
+              { status: 200 },
+            );
+          }
           jobStore.update(job.id, {
             status: "done",
             scanned: 1,
+            parked: 1,
             finishedAt: Date.now(),
           });
           return Response.json(
-            {
-              decision,
-              replayed: false,
-              parked: false,
-              dryRun: true,
-              wouldStampHeaders: wouldSend.map(([k, v]) => ({
-                name: k?.toString("utf-8") ?? null,
-                value: v?.toString("utf-8") ?? null,
-              })),
-            },
+            { decision, replayed: false, parked: true, dryRun: false, targetTopic },
             { status: 200 },
           );
         } finally {
