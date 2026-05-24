@@ -1,5 +1,28 @@
+# DISABLED — migrated to GitLab CI on 2026-05-24.
+#
+# CD authority moved from
+#   github.com/zx8086/eventgate/.github/workflows/cd.yml  (this file)
+# to
+#   gitlab.siobytes.cloud/siobytes/eventgate/.gitlab-ci.yml
+# See siobytes/infra-runbooks → eventgate-gitlab-migration.md §7 for the
+# full cutover design + rollback procedure.
+#
+# This file is RENAMED `cd.yml` → `cd.yml.disabled` so GitHub Actions no
+# longer auto-discovers it (Actions only picks up *.yml / *.yaml under
+# .github/workflows/). The `if: false` guard added to every job below is
+# defence-in-depth: if anyone restores the .yml extension by accident,
+# every job is still a no-op.
+#
+# Rollback (if the GitLab pipeline goes catastrophically wrong and the
+# old DOCKER_PASSWORD has NOT yet been revoked per runbook §7.4 / T-7):
+#   1. mv .github/workflows/cd.yml.disabled .github/workflows/cd.yml
+#   2. Remove `if: false` from each job in this file.
+#   3. Push to master. Set CUTOVER_MODE=rc on siobytes/eventgate (GitLab UI)
+#      to stop the GitLab side from racing on canonical tags.
+#   4. Reach for runbook §7.4 for the full procedure.
+
 # Build, push, scan Docker image. Runs on push to default branch and tags.
-name: CD
+name: CD (disabled — migrated to GitLab)
 
 on:
   push:
@@ -23,6 +46,7 @@ env:
 
 jobs:
   build-and-push:
+    if: false  # disabled — see header. Belt-and-braces alongside the .disabled extension.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -84,6 +108,7 @@ jobs:
             SERVICE_LICENSE=UNLICENSED
 
   scan:
+    if: false  # disabled — see header.
     needs: build-and-push
     runs-on: ubuntu-latest
     timeout-minutes: 10
